@@ -1,0 +1,47 @@
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  font-family: -apple-system, "Noto Sans TC", "Microsoft JhengHei", sans-serif;
+  background: #0b0e13;
+  color: #e7ecf3;
+}
+
+#map {
+  position: absolute;
+  inset: 0;
+}
+
+.brand {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 2;
+  background: rgba(11, 14, 19, 0.72);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 10px 14px;
+}
+.brand strong {
+  font-size: 15px;
+  letter-spacing: 0.5px;
+}
+.brand span {
+  display: block;
+  font-size: 12px;
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+.token-missing {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  line-height: 1.7;
+}
