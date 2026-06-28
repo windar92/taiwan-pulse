@@ -1,0 +1,14 @@
+name: ingest
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: trigger ingest
+        run: |
+          curl -sS -X POST "https://taiwan-pulse-five.vercel.app/api/ingest" \
+            -H "x-ingest-secret: ${{ secrets.INGEST_SECRET }}" \
+            --max-time 120
