@@ -179,6 +179,8 @@ export default function App() {
     setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; });
   }
 
+  const allOn = visible.size === CATS.length;
+
   if (!TOKEN) return <div className="token-missing"><div><strong>尚未設定 Mapbox token</strong></div></div>;
 
   return (
@@ -203,6 +205,9 @@ export default function App() {
             <span className="cnt">{counts[c.id] || 0}</span>
           </button>
         ))}
+        <button className="legend-item" onClick={() => setVisible(allOn ? new Set() : new Set(CATS.map((c) => c.id)))} title="全選 / 取消全選">
+          <span className="dot" style={{ background: "#ffffff", opacity: allOn ? 1 : 0.25 }} />全選
+        </button>
       </div>
     </>
   );
