@@ -39,6 +39,7 @@ export default function App() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showMemo, setShowMemo] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
+  const [satOn, setSatOn] = useState(false);
   const [sel, setSel] = useState<Sel | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -87,6 +88,11 @@ export default function App() {
             "hillshade-accent-color": "#243044",
           },
         });
+        // 衛星實景底圖（預設隱藏，按鈕切換）→ 搭配真實地形＝比例微縮模型
+        if (!map.getSource("sat")) {
+          map.addSource("sat", { type: "raster", url: "mapbox://mapbox.satellite", tileSize: 256 });
+        }
+        map.addLayer({ id: "sat-layer", type: "raster", source: "sat", layout: { visibility: "none" }, paint: { "raster-opacity": 1 } });
       } catch {}
 
       try {
@@ -167,6 +173,13 @@ export default function App() {
 
   function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
   function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
+  function toggleSat() {
+    const m = mapRef.current; if (!m || !m.getLayer("sat-layer")) return;
+    const on = m.getLayoutProperty("sat-layer", "visibility") !== "visible";
+    m.setLayoutProperty("sat-layer", "visibility", on ? "visible" : "none");
+    if (m.getLayer("hillshade")) m.setLayoutProperty("hillshade", "visibility", on ? "none" : "visible");
+    setSatOn(on);
+  }
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -187,6 +200,10 @@ export default function App() {
         {showMemo && <button className="memo-btn" onClick={memorize} title="把目前畫面中心設為我的置中位置">{memoSaved ? "已記憶 ✓" : "記憶"}</button>}
         <button className="ctr-btn" onClick={recenter} title="回到我的置中位置">⌖</button>
       </div>
+
+      <button className={"basemap-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="切換深色 / 衛星實景底圖">
+        {satOn ? "深色" : "衛星"}
+      </button>
 
       {sel && (
         <div className="panel">

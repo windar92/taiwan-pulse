@@ -77,6 +77,25 @@ body,
   background: #3a987e;
 }
 
+/* 底圖切換（深色 / 衛星） */
+.basemap-btn {
+  position: absolute;
+  top: 172px;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.basemap-btn.on { background: #2f7d68; color: #fff; }
+.basemap-btn:hover { filter: brightness(1.05); }
+
 /* 圖例 / 圖層開關 */
 .legend {
   position: absolute;
