@@ -73,7 +73,7 @@ export default function App() {
         if (!map.getSource("mapbox-dem")) {
           map.addSource("mapbox-dem", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });
         }
-        map.setTerrain({ source: "mapbox-dem", exaggeration: 2.2 });
+        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.0 });
         if (!map.getLayer("sky")) {
           map.addLayer({ id: "sky", type: "sky", paint: { "sky-type": "atmosphere", "sky-atmosphere-sun": [0.0, 88.0], "sky-atmosphere-sun-intensity": 8 } });
         }
