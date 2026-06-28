@@ -59,13 +59,26 @@ export default function App() {
     mapboxgl.accessToken = TOKEN;
     const map = new mapboxgl.Map({
       container: containerRef.current, style: "mapbox://styles/mapbox/dark-v11",
-      projection: { name: "mercator" }, center: [home.lng, home.lat], zoom: home.zoom || 7.3, pitch: 25,
+      projection: { name: "mercator" }, center: [home.lng, home.lat], zoom: home.zoom || 7.3,
+      pitch: home.pitch ?? 55, bearing: home.bearing ?? 0,
     });
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
     hoverRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "hover-tip" });
 
     map.on("style.load", async () => {
+      // 真實地形：台灣本島＋離島的實際高度，做出等比例微縮模型的立體感
+      try {
+        if (!map.getSource("mapbox-dem")) {
+          map.addSource("mapbox-dem", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });
+        }
+        map.setTerrain({ source: "mapbox-dem", exaggeration: 1.6 });
+        if (!map.getLayer("sky")) {
+          map.addLayer({ id: "sky", type: "sky", paint: { "sky-type": "atmosphere", "sky-atmosphere-sun": [0.0, 90.0], "sky-atmosphere-sun-intensity": 6 } });
+        }
+        map.addLayer({ id: "hillshade", type: "hillshade", source: "mapbox-dem", paint: { "hillshade-exaggeration": 0.45 } });
+      } catch {}
+
       try {
         const gj = await fetch(COUNTY_GEOJSON).then((r) => r.json());
         const props = gj.features?.[0]?.properties || {};
@@ -142,8 +155,8 @@ export default function App() {
     setCounts(tally);
   }
 
-  function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, duration: 1100 }); }
-  function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
+  function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
+  function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
