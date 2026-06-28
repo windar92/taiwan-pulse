@@ -39,7 +39,7 @@ export default function App() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showMemo, setShowMemo] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
-  const [satOn, setSatOn] = useState(false);
+  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat">("dark");
   const [sel, setSel] = useState<Sel | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -93,6 +93,19 @@ export default function App() {
           map.addSource("sat", { type: "raster", url: "mapbox://mapbox.satellite", tileSize: 256 });
         }
         map.addLayer({ id: "sat-layer", type: "raster", source: "sat", layout: { visibility: "none" }, paint: { "raster-opacity": 1 } });
+        // 等高線（地形圖模式用，預設隱藏）→ 搭配真實 3D 凸起、不需衛星照片
+        if (!map.getSource("tw-contour")) {
+          map.addSource("tw-contour", { type: "vector", url: "mapbox://mapbox.mapbox-terrain-v2" });
+        }
+        map.addLayer({
+          id: "contour-line", type: "line", source: "tw-contour", "source-layer": "contour",
+          layout: { visibility: "none", "line-join": "round" },
+          paint: {
+            "line-color": "#6fae9f",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.35, 11, 0.9, 14, 1.4],
+            "line-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.3, 11, 0.55],
+          },
+        });
       } catch {}
 
       try {
@@ -173,13 +186,18 @@ export default function App() {
 
   function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
   function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
-  function toggleSat() {
-    const m = mapRef.current; if (!m || !m.getLayer("sat-layer")) return;
-    const on = m.getLayoutProperty("sat-layer", "visibility") !== "visible";
-    m.setLayoutProperty("sat-layer", "visibility", on ? "visible" : "none");
-    if (m.getLayer("hillshade")) m.setLayoutProperty("hillshade", "visibility", on ? "none" : "visible");
-    setSatOn(on);
+  function applyBasemap(mode: "dark" | "topo" | "sat") {
+    const m = mapRef.current; if (!m) return;
+    const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
+    vis("sat-layer", mode === "sat");
+    vis("contour-line", mode === "topo");
+    vis("hillshade", mode !== "sat"); // 深色與地形模式都用陰影做凸起；衛星本身已有實景
+    setBasemap(mode);
   }
+  function cycleBasemap() {
+    applyBasemap(basemap === "dark" ? "topo" : basemap === "topo" ? "sat" : "dark");
+  }
+  const BASEMAP_LABEL = { dark: "深色", topo: "地形", sat: "衛星" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -201,8 +219,8 @@ export default function App() {
         <button className="ctr-btn" onClick={recenter} title="回到我的置中位置">⌖</button>
       </div>
 
-      <button className={"basemap-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="切換深色 / 衛星實景底圖">
-        {satOn ? "深色" : "衛星"}
+      <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：深色 → 地形(等高線) → 衛星實景">
+        {BASEMAP_LABEL[basemap]}
       </button>
 
       {sel && (
