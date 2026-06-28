@@ -6,17 +6,18 @@ const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
 
-type Cat = "disaster" | "safety" | "warning" | "policy" | "ecology" | "activity" | "report";
+type Cat = "disaster" | "safety" | "warning" | "defense" | "policy" | "ecology" | "activity" | "report";
 const CATS: { id: Cat; label: string; color: string }[] = [
   { id: "disaster", label: "自然災害", color: "#ef5350" },
   { id: "safety", label: "公共安全", color: "#ff8a65" },
   { id: "warning", label: "警戒管制", color: "#ffd54f" },
+  { id: "defense", label: "國防軍事", color: "#9fa8da" },
   { id: "policy", label: "政策民生", color: "#4fc3f7" },
   { id: "ecology", label: "生態", color: "#81c784" },
   { id: "activity", label: "活動", color: "#ba68c8" },
   { id: "report", label: "回報牆", color: "#26c6da" },
 ];
-const PRIORITY: Cat[] = ["disaster", "safety", "warning", "policy", "ecology", "activity"];
+const PRIORITY: Cat[] = ["disaster", "safety", "warning", "defense", "policy", "ecology", "activity"];
 const COLOR: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.color]));
 const LABEL: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.label]));
 const REPORT_OPTIONS = ["地點錯誤（釘錯位置）", "分類錯誤", "與主題無關（不該顯示）", "內容或標題有誤", "重複內容", "已過期或失效", "連結打不開", "其他"];
@@ -79,7 +80,7 @@ export default function App() {
         id: "intel-pts", type: "circle", source: "intel",
         paint: {
           "circle-radius": ["case", ["==", ["get", "cat"], "report"], 6, 7],
-          "circle-color": ["match", ["get", "cat"], "disaster", COLOR.disaster, "safety", COLOR.safety, "warning", COLOR.warning, "policy", COLOR.policy, "ecology", COLOR.ecology, "activity", COLOR.activity, "report", COLOR.report, "#888"],
+          "circle-color": ["match", ["get", "cat"], "disaster", COLOR.disaster, "safety", COLOR.safety, "warning", COLOR.warning, "defense", COLOR.defense, "policy", COLOR.policy, "ecology", COLOR.ecology, "activity", COLOR.activity, "report", COLOR.report, "#888"],
           "circle-opacity": 0.85, "circle-stroke-width": 1.3, "circle-stroke-color": "rgba(255,255,255,0.85)",
         },
       });
