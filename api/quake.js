@@ -9,24 +9,22 @@ export default async function handler(req, res) {
   if (!key) return send(200, { ok: false, error: "CWA_KEY 未設定", quakes: [] });
   const intNum = (s) => { const m = String(s || "").match(/(\d)/); let n = m ? parseInt(m[1]) : 0; if (String(s).includes("強")) n += 0.5; return n; };
   try {
-    const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001?Authorization=${key}&format=JSON&limit=20`;
+    const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/E-A0015-001?Authorization=${key}&format=JSON&limit=15`;
     const r = await fetch(url, { headers: { "User-Agent": "TaiwanPulse/0.1 (+map)" } });
     if (!r.ok) throw new Error(`CWA ${r.status}`);
     const j = await r.json();
     const eqs = j?.records?.Earthquake || [];
-    const quakes = eqs.map((e, idx) => {
+    const quakes = eqs.map((e) => {
       const info = e.EarthquakeInfo || {};
       const ep = info.Epicenter || {};
       const stations = [];
-      if (idx < 3) {
-        for (const area of (e.Intensity?.ShakingArea || [])) {
-          for (const st of (area.EqStation || [])) {
-            const lat = st.StationLatitude, lon = st.StationLongitude;
-            if (typeof lat !== "number" || typeof lon !== "number") continue;
-            const intv = intNum(st.SeismicIntensity);
-            if (intv <= 0) continue;
-            stations.push({ name: st.StationName, lon, lat, int: intv, intLabel: st.SeismicIntensity });
-          }
+      for (const area of (e.Intensity?.ShakingArea || [])) {
+        for (const st of (area.EqStation || [])) {
+          const lat = st.StationLatitude, lon = st.StationLongitude;
+          if (typeof lat !== "number" || typeof lon !== "number") continue;
+          const intv = intNum(st.SeismicIntensity);
+          if (intv <= 0) continue;
+          stations.push({ name: st.StationName, lon, lat, int: intv, intLabel: st.SeismicIntensity });
         }
       }
       return {
