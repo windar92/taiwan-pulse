@@ -10,6 +10,11 @@ const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/j
 const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
 function qDate(t: string) { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function qLoc(s: string) { if (!s) return ""; const m = String(s).match(/位於(.+?)\)/); return m ? m[1] : String(s).slice(0, 10); }
+// 中央氣象署震度色階(1→7級)
+const INT_COLORS: Record<number, number[]> = {
+  1: [150, 210, 140], 2: [120, 200, 90], 3: [245, 210, 70], 4: [245, 165, 60], 5: [235, 80, 45], 6: [196, 35, 42], 7: [139, 47, 160],
+};
+const INT_HEX = ["#96d28c", "#78c85a", "#f5d246", "#f5a53c", "#eb502d", "#c4232a", "#8b2fa0"]; // 1..7
 
 type Cat = "disaster" | "safety" | "warning" | "defense" | "policy" | "ecology" | "activity" | "report";
 const CATS: { id: Cat; label: string; color: string }[] = [
@@ -63,6 +68,7 @@ export default function App() {
   const quakePopRef = useRef<mapboxgl.Popup | null>(null);
   const deckRef = useRef<any>(null);
   const deckLayersRef = useRef<Record<string, any[]>>({});
+  const intCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const refreshOrder = () =>
     fetch("/api/feedback").then((r) => r.json()).then((d) => {
@@ -352,41 +358,22 @@ export default function App() {
     }
     return { g, nx, ny, x0, y0, dx, dy };
   }
-  // marching squares：在網格上抽出某一震度等值線
-  function contourLines(G: any, level: number) {
-    const { g, nx, ny, x0, y0, dx, dy } = G;
-    const segs: number[][][] = [];
-    const ip = (xa: number, ya: number, va: number, xb: number, yb: number, vb: number) => { const t = (level - va) / (vb - va); return [xa + (xb - xa) * t, ya + (yb - ya) * t]; };
-    for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
-      const x = x0 + i * dx, y = y0 + j * dy;
-      const v0 = g[j * nx + i], v1 = g[j * nx + i + 1], v2 = g[(j + 1) * nx + i + 1], v3 = g[(j + 1) * nx + i];
-      let id = 0; if (v0 >= level) id |= 1; if (v1 >= level) id |= 2; if (v2 >= level) id |= 4; if (v3 >= level) id |= 8;
-      if (id === 0 || id === 15) continue;
-      const eb = () => ip(x, y, v0, x + dx, y, v1), er = () => ip(x + dx, y, v1, x + dx, y + dy, v2), et = () => ip(x + dx, y + dy, v2, x, y + dy, v3), el = () => ip(x, y + dy, v3, x, y, v0);
-      const ad = (a: number[], b: number[]) => segs.push([a, b]);
-      switch (id) {
-        case 1: case 14: ad(el(), eb()); break;
-        case 2: case 13: ad(eb(), er()); break;
-        case 3: case 12: ad(el(), er()); break;
-        case 4: case 11: ad(er(), et()); break;
-        case 6: case 9: ad(eb(), et()); break;
-        case 7: case 8: ad(el(), et()); break;
-        case 5: ad(el(), eb()); ad(er(), et()); break;
-        case 10: ad(eb(), er()); ad(el(), et()); break;
-      }
-    }
-    return segs;
-  }
-  // 等震度線(像等高線)：把同震度連起來
-  function quakeContourFC(stations: any[]) {
-    if (stations.length < 3) return { type: "FeatureCollection", features: [] } as any;
+  // ShakeMap 式填色：把 IDW 網格畫成色帶影像(回傳 data URL + 地理範圍)
+  function shakeImage(stations: any[]) {
     const G = idwGrid(stations);
-    const feats: any[] = [];
-    for (const t of [1.5, 2.5, 3.5, 4.5, 5.5, 6.5]) {
-      const segs = contourLines(G, t);
-      if (segs.length) feats.push({ type: "Feature", geometry: { type: "MultiLineString", coordinates: segs }, properties: { lev: Math.ceil(t) } });
+    const { g, nx, ny, x0, y0, dx, dy } = G;
+    const x1 = x0 + (nx - 1) * dx, y1 = y0 + (ny - 1) * dy;
+    let cv = intCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); intCanvasRef.current = cv; }
+    cv.width = nx; cv.height = ny;
+    const ctx = cv.getContext("2d")!; const img = ctx.createImageData(nx, ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const v = g[j * nx + i], row = ny - 1 - j, o = (row * nx + i) * 4;
+      if (v < 1) { img.data[o + 3] = 0; continue; }
+      const c = INT_COLORS[Math.max(1, Math.min(7, Math.round(v)))];
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 165;
     }
-    return { type: "FeatureCollection", features: feats } as any;
+    ctx.putImageData(img, 0, 0);
+    return { url: cv.toDataURL(), coords: [[x0, y1], [x1, y1], [x1, y0], [x0, y0]] as any };
   }
   // 所有有感測站的點
   function quakeStationsFC(stations: any[]) {
@@ -411,7 +398,8 @@ export default function App() {
     const m = mapRef.current; if (!m || !q) return;
     const epiFC = { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "Point", coordinates: [q.lon, q.lat] }, properties: { mag: q.mag, depth: q.depth, time: q.time, location: q.location, web: q.web } }] } as any;
     (m.getSource("quake-epi-src") as mapboxgl.GeoJSONSource)?.setData(epiFC);
-    (m.getSource("quake-spread-src") as mapboxgl.GeoJSONSource)?.setData(quakeContourFC(q.stations || []));
+    const shakeSrc = m.getSource("quake-shake") as any;
+    if (shakeSrc) shakeSrc.updateImage({ url: shakeImage(q.stations || []).url });
     (m.getSource("quake-sta-src") as mapboxgl.GeoJSONSource)?.setData(quakeStationsFC(q.stations || []));
   }
   function selectQuake(i: number) {
@@ -423,7 +411,7 @@ export default function App() {
     const m = mapRef.current; if (!m) return;
     const on = !quakeOn;
     if (!on) {
-      for (const id of ["quake-contour", "quake-sta", "quake-epi", "quake-ripple"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
+      for (const id of ["quake-shake-layer", "quake-sta", "quake-epi", "quake-ripple"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
       stopRipple(); quakePopRef.current?.remove();
       setQuakeOn(false); setQuakeList([]); setQuakeInfo("");
       return;
@@ -433,24 +421,17 @@ export default function App() {
       if (!d.ok) { setQuakeInfo(d.error === "CWA_KEY 未設定" ? "地震未啟用：請設定 CWA_KEY" : "地震讀取失敗"); return; }
       const quakes = d.quakes || [];
       if (!quakes.length) { setQuakeInfo("近期無顯著有感地震"); return; }
-      if (!m.getSource("quake-spread-src")) {
-        m.addSource("quake-spread-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-        m.addLayer({
-          id: "quake-contour", type: "line", source: "quake-spread-src",
-          layout: { "line-join": "round", "line-cap": "round" },
-          paint: {
-            "line-color": ["interpolate", ["linear"], ["get", "lev"], 2, "#7ec97e", 3, "#f7d34a", 4, "#f7a13a", 5, "#ef5b3a", 6, "#e23b3b", 7, "#b3208a"],
-            "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.6, 11, 3.2],
-            "line-opacity": 0.92,
-          },
-        });
+      if (!m.getSource("quake-shake")) {
+        const sh = shakeImage(quakes[0].stations || []);
+        m.addSource("quake-shake", { type: "image", url: sh.url, coordinates: sh.coords });
+        m.addLayer({ id: "quake-shake-layer", type: "raster", source: "quake-shake", paint: { "raster-opacity": 0.6, "raster-resampling": "linear", "raster-fade-duration": 0 } });
         m.addSource("quake-sta-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         m.addLayer({
           id: "quake-sta", type: "circle", source: "quake-sta-src",
           paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 4.5],
-            "circle-color": ["interpolate", ["linear"], ["get", "int"], 1, "#9fd98f", 2, "#f7e463", 3, "#f7b14a", 4, "#f2663a", 5, "#e23b3b", 6, "#b3208a", 7, "#7a0fb0"],
-            "circle-opacity": 0.9, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(255,255,255,0.7)",
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2, 11, 3.5],
+            "circle-color": ["interpolate", ["linear"], ["get", "int"], 1, "#96d28c", 2, "#78c85a", 3, "#f5d246", 4, "#f5a53c", 5, "#eb502d", 6, "#c4232a", 7, "#8b2fa0"],
+            "circle-opacity": 0.85, "circle-stroke-width": 0.5, "circle-stroke-color": "rgba(0,0,0,0.4)",
           },
         });
       }
@@ -458,11 +439,9 @@ export default function App() {
         m.addSource("quake-epi-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         m.addLayer({ id: "quake-ripple", type: "circle", source: "quake-epi-src", paint: { "circle-radius": 10, "circle-color": "#ff5a5a", "circle-opacity": 0.1, "circle-stroke-color": "#ff8080", "circle-stroke-width": 2, "circle-stroke-opacity": 0.5 } });
         m.addLayer({
-          id: "quake-epi", type: "circle", source: "quake-epi-src",
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["coalesce", ["get", "mag"], 3], 3, 5, 5, 9, 7, 16],
-            "circle-color": "#d62828", "circle-opacity": 0.95, "circle-stroke-width": 2, "circle-stroke-color": "#fff",
-          },
+          id: "quake-epi", type: "symbol", source: "quake-epi-src",
+          layout: { "text-field": "★", "text-size": ["interpolate", ["linear"], ["coalesce", ["get", "mag"], 4], 3, 18, 7, 38], "text-allow-overlap": true, "text-ignore-placement": true },
+          paint: { "text-color": "#ffffff", "text-halo-color": "#b3001b", "text-halo-width": 2.2 },
         });
         m.on("click", "quake-epi", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
@@ -475,7 +454,7 @@ export default function App() {
         m.on("mouseenter", "quake-epi", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "quake-epi", () => { m.getCanvas().style.cursor = ""; });
       }
-      for (const id of ["quake-contour", "quake-sta", "quake-epi", "quake-ripple"]) m.setLayoutProperty(id, "visibility", "visible");
+      for (const id of ["quake-shake-layer", "quake-sta", "quake-epi", "quake-ripple"]) m.setLayoutProperty(id, "visibility", "visible");
       setQuakeList(quakes); setQuakeSel(0);
       renderQuake(quakes[0]); startRipple();
       setQuakeOn(true); setQuakeInfo("");
@@ -536,6 +515,13 @@ export default function App() {
               <span className="ql-loc">M{q.mag ?? "?"}　{qLoc(q.location)}</span>
             </div>
           ))}
+        </div>
+      )}
+
+      {quakeOn && (
+        <div className="quake-legend">
+          <span className="qlg-title">震度</span>
+          {INT_HEX.map((c, idx) => (<span key={idx} className="qlg-sw" style={{ background: c }}>{idx + 1}</span>))}
         </div>
       )}
 
