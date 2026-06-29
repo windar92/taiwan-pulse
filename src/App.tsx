@@ -331,26 +331,66 @@ export default function App() {
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
   }
-  // 凸包(Andrew monotone chain)：把一群測站點圍成不規則多邊形
-  function convexHull(pts: number[][]) {
-    if (pts.length < 3) return null;
-    const p = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    const cross = (o: number[], a: number[], b: number[]) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
-    const lo: number[][] = [];
-    for (const q of p) { while (lo.length >= 2 && cross(lo[lo.length - 2], lo[lo.length - 1], q) <= 0) lo.pop(); lo.push(q); }
-    const up: number[][] = [];
-    for (let i = p.length - 1; i >= 0; i--) { const q = p[i]; while (up.length >= 2 && cross(up[up.length - 2], up[up.length - 1], q) <= 0) up.pop(); up.push(q); }
-    lo.pop(); up.pop();
-    const h = lo.concat(up); h.push(h[0]); return h;
+  // 以各站震度做 IDW 空間內插，建出規則網格(資料空白區設 0，讓等高線收在有感範圍內)
+  function idwGrid(stations: any[]) {
+    const x0 = 119.2, x1 = 122.4, y0 = 21.7, y1 = 25.5, dx = 0.035, dy = 0.035;
+    const nx = Math.ceil((x1 - x0) / dx) + 1, ny = Math.ceil((y1 - y0) / dy) + 1;
+    const g = new Float32Array(nx * ny);
+    const maxD2 = 0.4 * 0.4;
+    for (let j = 0; j < ny; j++) {
+      const y = y0 + j * dy;
+      for (let i = 0; i < nx; i++) {
+        const x = x0 + i * dx;
+        let num = 0, den = 0, nearest = 1e9;
+        for (const s of stations) {
+          const ddx = s.lon - x, ddy = s.lat - y, d2 = ddx * ddx + ddy * ddy;
+          if (d2 < nearest) nearest = d2;
+          const w = 1 / (d2 + 1e-6); num += w * s.int; den += w;
+        }
+        g[j * nx + i] = nearest > maxD2 ? 0 : (den ? num / den : 0);
+      }
+    }
+    return { g, nx, ny, x0, y0, dx, dy };
   }
-  // 依各站震度，畫出由外而內、不規則的「震度擴散範圍」(每一震度級一圈)
-  function quakeSpreadFC(stations: any[]) {
+  // marching squares：在網格上抽出某一震度等值線
+  function contourLines(G: any, level: number) {
+    const { g, nx, ny, x0, y0, dx, dy } = G;
+    const segs: number[][][] = [];
+    const ip = (xa: number, ya: number, va: number, xb: number, yb: number, vb: number) => { const t = (level - va) / (vb - va); return [xa + (xb - xa) * t, ya + (yb - ya) * t]; };
+    for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+      const x = x0 + i * dx, y = y0 + j * dy;
+      const v0 = g[j * nx + i], v1 = g[j * nx + i + 1], v2 = g[(j + 1) * nx + i + 1], v3 = g[(j + 1) * nx + i];
+      let id = 0; if (v0 >= level) id |= 1; if (v1 >= level) id |= 2; if (v2 >= level) id |= 4; if (v3 >= level) id |= 8;
+      if (id === 0 || id === 15) continue;
+      const eb = () => ip(x, y, v0, x + dx, y, v1), er = () => ip(x + dx, y, v1, x + dx, y + dy, v2), et = () => ip(x + dx, y + dy, v2, x, y + dy, v3), el = () => ip(x, y + dy, v3, x, y, v0);
+      const ad = (a: number[], b: number[]) => segs.push([a, b]);
+      switch (id) {
+        case 1: case 14: ad(el(), eb()); break;
+        case 2: case 13: ad(eb(), er()); break;
+        case 3: case 12: ad(el(), er()); break;
+        case 4: case 11: ad(er(), et()); break;
+        case 6: case 9: ad(eb(), et()); break;
+        case 7: case 8: ad(el(), et()); break;
+        case 5: ad(el(), eb()); ad(er(), et()); break;
+        case 10: ad(eb(), er()); ad(el(), et()); break;
+      }
+    }
+    return segs;
+  }
+  // 等震度線(像等高線)：把同震度連起來
+  function quakeContourFC(stations: any[]) {
+    if (stations.length < 3) return { type: "FeatureCollection", features: [] } as any;
+    const G = idwGrid(stations);
     const feats: any[] = [];
-    for (const L of [1, 2, 3, 4, 5, 6, 7]) {
-      const hull = convexHull(stations.filter((s) => s.int >= L).map((s) => [s.lon, s.lat]));
-      if (hull) feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [hull] }, properties: { level: L } });
+    for (const t of [1.5, 2.5, 3.5, 4.5, 5.5, 6.5]) {
+      const segs = contourLines(G, t);
+      if (segs.length) feats.push({ type: "Feature", geometry: { type: "MultiLineString", coordinates: segs }, properties: { lev: Math.ceil(t) } });
     }
     return { type: "FeatureCollection", features: feats } as any;
+  }
+  // 所有有感測站的點
+  function quakeStationsFC(stations: any[]) {
+    return { type: "FeatureCollection", features: stations.map((s) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: { int: s.int, intLabel: s.intLabel, name: s.name } })) } as any;
   }
   function stopRipple() { if (rippleRef.current != null) { cancelAnimationFrame(rippleRef.current); rippleRef.current = null; } }
   function startRipple() {
@@ -371,7 +411,8 @@ export default function App() {
     const m = mapRef.current; if (!m || !q) return;
     const epiFC = { type: "FeatureCollection", features: [{ type: "Feature", geometry: { type: "Point", coordinates: [q.lon, q.lat] }, properties: { mag: q.mag, depth: q.depth, time: q.time, location: q.location, web: q.web } }] } as any;
     (m.getSource("quake-epi-src") as mapboxgl.GeoJSONSource)?.setData(epiFC);
-    (m.getSource("quake-spread-src") as mapboxgl.GeoJSONSource)?.setData(quakeSpreadFC(q.stations || []));
+    (m.getSource("quake-spread-src") as mapboxgl.GeoJSONSource)?.setData(quakeContourFC(q.stations || []));
+    (m.getSource("quake-sta-src") as mapboxgl.GeoJSONSource)?.setData(quakeStationsFC(q.stations || []));
   }
   function selectQuake(i: number) {
     const q = quakeList[i]; if (!q) return;
@@ -382,7 +423,7 @@ export default function App() {
     const m = mapRef.current; if (!m) return;
     const on = !quakeOn;
     if (!on) {
-      for (const id of ["quake-spread", "quake-spread-line", "quake-epi", "quake-ripple"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
+      for (const id of ["quake-contour", "quake-sta", "quake-epi", "quake-ripple"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
       stopRipple(); quakePopRef.current?.remove();
       setQuakeOn(false); setQuakeList([]); setQuakeInfo("");
       return;
@@ -395,13 +436,23 @@ export default function App() {
       if (!m.getSource("quake-spread-src")) {
         m.addSource("quake-spread-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         m.addLayer({
-          id: "quake-spread", type: "fill", source: "quake-spread-src",
+          id: "quake-contour", type: "line", source: "quake-spread-src",
+          layout: { "line-join": "round", "line-cap": "round" },
           paint: {
-            "fill-color": ["interpolate", ["linear"], ["get", "level"], 1, "#9fd98f", 2, "#f7e463", 3, "#f7b14a", 4, "#f2663a", 5, "#e23b3b", 6, "#b3208a", 7, "#7a0fb0"],
-            "fill-opacity": 0.28,
+            "line-color": ["interpolate", ["linear"], ["get", "lev"], 2, "#7ec97e", 3, "#f7d34a", 4, "#f7a13a", 5, "#ef5b3a", 6, "#e23b3b", 7, "#b3208a"],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 6, 1.6, 11, 3.2],
+            "line-opacity": 0.92,
           },
         });
-        m.addLayer({ id: "quake-spread-line", type: "line", source: "quake-spread-src", paint: { "line-color": "#ffffff", "line-width": 1, "line-opacity": 0.25 } });
+        m.addSource("quake-sta-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        m.addLayer({
+          id: "quake-sta", type: "circle", source: "quake-sta-src",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 4.5],
+            "circle-color": ["interpolate", ["linear"], ["get", "int"], 1, "#9fd98f", 2, "#f7e463", 3, "#f7b14a", 4, "#f2663a", 5, "#e23b3b", 6, "#b3208a", 7, "#7a0fb0"],
+            "circle-opacity": 0.9, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(255,255,255,0.7)",
+          },
+        });
       }
       if (!m.getSource("quake-epi-src")) {
         m.addSource("quake-epi-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -424,7 +475,7 @@ export default function App() {
         m.on("mouseenter", "quake-epi", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "quake-epi", () => { m.getCanvas().style.cursor = ""; });
       }
-      for (const id of ["quake-spread", "quake-spread-line", "quake-epi", "quake-ripple"]) m.setLayoutProperty(id, "visibility", "visible");
+      for (const id of ["quake-contour", "quake-sta", "quake-epi", "quake-ripple"]) m.setLayoutProperty(id, "visibility", "visible");
       setQuakeList(quakes); setQuakeSel(0);
       renderQuake(quakes[0]); startRipple();
       setQuakeOn(true); setQuakeInfo("");
@@ -477,8 +528,8 @@ export default function App() {
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">
-          <div className="ql-head">近期有感地震（舊 → 新）</div>
-          {quakeList.map((q, i) => ({ q, i })).reverse().map(({ q, i }) => (
+          <div className="ql-head">近期有感地震（新 → 舊）</div>
+          {quakeList.map((q, i) => ({ q, i })).map(({ q, i }) => (
             <div key={q.no ?? i} className={"ql-item" + (i === quakeSel ? " sel" : "")}
               title={`規模 ${q.mag ?? "?"}・深度 ${q.depth ?? "?"} km`} onClick={() => selectQuake(i)}>
               <span className="ql-date">{qDate(q.time)}</span>
