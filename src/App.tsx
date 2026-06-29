@@ -46,6 +46,8 @@ export default function App() {
   const [chosen, setChosen] = useState<Set<string>>(new Set());
   const [sent, setSent] = useState(false);
   const [optOrder, setOptOrder] = useState<string[]>(REPORT_OPTIONS);
+  const [terrainBlocked, setTerrainBlocked] = useState(false);
+  const [hintDismissed, setHintDismissed] = useState(false);
 
   const refreshOrder = () =>
     fetch("/api/feedback").then((r) => r.json()).then((d) => {
@@ -53,6 +55,22 @@ export default function App() {
     }).catch(() => {});
 
   useEffect(() => { refreshOrder(); }, []);
+
+  // 偵測瀏覽器是否開了防指紋/隱私防護（會汙染 Canvas2D 讀回，導致 Mapbox 關掉 3D 地形）
+  useEffect(() => {
+    try {
+      const c = document.createElement("canvas"); c.width = 6; c.height = 6;
+      const ctx = c.getContext("2d", { willReadFrequently: true } as any);
+      if (!ctx) { setTerrainBlocked(true); return; }
+      ctx.fillStyle = "rgb(11,22,33)"; ctx.fillRect(0, 0, 6, 6);
+      const px = ctx.getImageData(0, 0, 6, 6).data;
+      let poisoned = false;
+      for (let i = 0; i < px.length; i += 4) {
+        if (px[i] !== 11 || px[i + 1] !== 22 || px[i + 2] !== 33) { poisoned = true; break; }
+      }
+      if (poisoned) setTerrainBlocked(true);
+    } catch { setTerrainBlocked(true); }
+  }, []);
 
   useEffect(() => {
     if (!containerRef.current || !TOKEN) return;
@@ -68,6 +86,15 @@ export default function App() {
     hoverRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "hover-tip" });
 
     map.on("style.load", async () => {
+      // 地名中文化：把所有文字圖層改成繁體中文，抓不到中文名者 fallback 原名
+      try {
+        for (const ly of (map.getStyle().layers || [])) {
+          if (ly.type === "symbol" && (ly as any).layout && (ly as any).layout["text-field"]) {
+            map.setLayoutProperty(ly.id, "text-field", ["coalesce", ["get", "name_zh-Hant"], ["get", "name_zh-Hans"], ["get", "name_zh"], ["get", "name"]]);
+          }
+        }
+      } catch {}
+
       // 真實地形：台灣本島＋離島的實際高度，做出等比例微縮模型的立體感
       try {
         if (!map.getSource("mapbox-dem")) {
@@ -213,6 +240,13 @@ export default function App() {
     <>
       <div id="map" ref={containerRef} />
       <div className="brand"><strong>台灣情報脈動</strong><span>各地即時消息與公部門公開資料</span></div>
+
+      {terrainBlocked && !hintDismissed && (
+        <div className="terrain-hint">
+          <span>🏔️ 3D 立體地形被瀏覽器的隱私／防指紋防護擋住了。若想看真實山形起伏，請關閉本站的盾牌（Brave）或防追蹤設定後重新整理。衛星與一般圖層不受影響。</span>
+          <button className="hint-x" onClick={() => setHintDismissed(true)} title="關閉提示">×</button>
+        </div>
+      )}
 
       <div className="center-control" onMouseEnter={() => setShowMemo(true)} onMouseLeave={() => setShowMemo(false)}>
         {showMemo && <button className="memo-btn" onClick={memorize} title="把目前畫面中心設為我的置中位置">{memoSaved ? "已記憶 ✓" : "記憶"}</button>}
