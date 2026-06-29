@@ -8,6 +8,7 @@ const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
 const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
+const QUAKE_H = 2500; // 地震震度柱示意高度倍率(每級)
 
 type Cat = "disaster" | "safety" | "warning" | "defense" | "policy" | "ecology" | "activity" | "report";
 const CATS: { id: Cat; label: string; color: string }[] = [
@@ -58,6 +59,7 @@ export default function App() {
   const rippleRef = useRef<number | null>(null);
   const quakePopRef = useRef<mapboxgl.Popup | null>(null);
   const deckRef = useRef<any>(null);
+  const deckLayersRef = useRef<Record<string, any[]>>({});
 
   const refreshOrder = () =>
     fetch("/api/feedback").then((r) => r.json()).then((d) => {
@@ -271,12 +273,18 @@ export default function App() {
     if (!deckRef.current) { deckRef.current = new MapboxOverlay({ interleaved: false, layers: [] }); m.addControl(deckRef.current as any); }
     return deckRef.current;
   }
+  // 多個圖層(雨量標號、地震標號…)共用同一個 deck overlay，用登記表合併
+  function setDeckLayers(key: string, layers: any[]) {
+    const deck = ensureDeck(); if (!deck) return;
+    deckLayersRef.current[key] = layers;
+    deck.setProps({ layers: Object.values(deckLayersRef.current).flat() });
+  }
   async function toggleRain() {
     const m = mapRef.current; if (!m) return;
     const on = !rainOn;
     if (!on) {
       if (m.getLayer("rain-col")) m.setLayoutProperty("rain-col", "visibility", "none");
-      if (deckRef.current) deckRef.current.setProps({ layers: [] });
+      setDeckLayers("rain", []);
       setRainOn(false); setRainInfo("");
       return;
     }
@@ -303,25 +311,126 @@ export default function App() {
       const peaks = rainPeaks(stations).map((s: any) => ({
         ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + s.r1 * RAIN_H,
       }));
-      const deck = ensureDeck();
-      if (deck) deck.setProps({
-        layers: [new TextLayer({
-          id: "rain-peak-text",
-          data: peaks,
-          getPosition: (d: any) => [d.lon, d.lat, d.z],
-          getText: (d: any) => `${d.name} ${Math.round(d.r1)}mm`,
-          getSize: 13, sizeUnits: "pixels",
-          getColor: [234, 244, 255, 255],
-          billboard: true,
-          fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif',
-          characterSet: "auto",
-          getTextAnchor: "middle", getAlignmentBaseline: "bottom",
-          background: true, getBackgroundColor: [6, 16, 31, 210], backgroundPadding: [5, 3],
-        })],
-      });
+      setDeckLayers("rain", [new TextLayer({
+        id: "rain-peak-text",
+        data: peaks,
+        getPosition: (d: any) => [d.lon, d.lat, d.z],
+        getText: (d: any) => `${d.name} ${Math.round(d.r1)}mm`,
+        getSize: 13, sizeUnits: "pixels",
+        getColor: [234, 244, 255, 255],
+        billboard: true,
+        fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif',
+        characterSet: "auto",
+        getTextAnchor: "middle", getAlignmentBaseline: "bottom",
+        background: true, getBackgroundColor: [6, 16, 31, 210], backgroundPadding: [5, 3],
+      })]);
       setRainOn(true);
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
+  }
+  // 地震各站震度 → 六角柱
+  function quakeHexFC(stations: any[]) {
+    const feats: any[] = []; const R = 0.0315;
+    for (const s of stations) {
+      if (!(s.int > 0)) continue;
+      const kx = R / Math.max(0.2, Math.cos((s.lat * Math.PI) / 180)), ky = R;
+      const ring: number[][] = [];
+      for (let i = 0; i < 6; i++) { const a = (Math.PI / 180) * (60 * i - 30); ring.push([s.lon + kx * Math.cos(a), s.lat + ky * Math.sin(a)]); }
+      ring.push(ring[0]);
+      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { int: s.int, name: s.name, intLabel: s.intLabel } });
+    }
+    return { type: "FeatureCollection", features: feats } as any;
+  }
+  function stopRipple() { if (rippleRef.current != null) { cancelAnimationFrame(rippleRef.current); rippleRef.current = null; } }
+  function startRipple() {
+    const m = mapRef.current; if (!m || !m.getLayer("quake-ripple")) return;
+    const period = 2600;
+    const tick = () => {
+      const mm = mapRef.current; if (!mm || !mm.getLayer("quake-ripple")) return;
+      const t = (performance.now() % period) / period;
+      const radius = 6 + t * 46, op = 0.55 * (1 - t);
+      mm.setPaintProperty("quake-ripple", "circle-radius", ["*", ["+", 0.5, ["/", ["coalesce", ["get", "mag"], 4], 6]], radius]);
+      mm.setPaintProperty("quake-ripple", "circle-stroke-opacity", op);
+      mm.setPaintProperty("quake-ripple", "circle-opacity", op * 0.22);
+      rippleRef.current = requestAnimationFrame(tick);
+    };
+    stopRipple(); rippleRef.current = requestAnimationFrame(tick);
+  }
+  async function toggleQuake() {
+    const m = mapRef.current; if (!m) return;
+    const on = !quakeOn;
+    if (!on) {
+      for (const id of ["quake-col", "quake-epi", "quake-ripple"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
+      stopRipple(); setDeckLayers("quake", []); quakePopRef.current?.remove();
+      setQuakeOn(false); setQuakeInfo("");
+      return;
+    }
+    try {
+      const d = await fetch("/api/quake").then((r) => r.json());
+      if (!d.ok) { setQuakeInfo(d.error === "CWA_KEY 未設定" ? "地震未啟用：請設定 CWA_KEY" : "地震讀取失敗"); return; }
+      const quakes = d.quakes || [];
+      if (!quakes.length) { setQuakeInfo("近期無顯著有感地震"); return; }
+      const latest = quakes[0];
+      const epiFC = {
+        type: "FeatureCollection",
+        features: quakes.map((q: any) => ({
+          type: "Feature", geometry: { type: "Point", coordinates: [q.lon, q.lat] },
+          properties: { mag: q.mag, depth: q.depth, time: q.time, location: q.location, web: q.web },
+        })),
+      } as any;
+      if (m.getSource("quake-epi-src")) (m.getSource("quake-epi-src") as mapboxgl.GeoJSONSource).setData(epiFC);
+      else {
+        m.addSource("quake-epi-src", { type: "geojson", data: epiFC });
+        m.addLayer({ id: "quake-ripple", type: "circle", source: "quake-epi-src", paint: { "circle-radius": 10, "circle-color": "#ff5a5a", "circle-opacity": 0.1, "circle-stroke-color": "#ff8080", "circle-stroke-width": 2, "circle-stroke-opacity": 0.4 } });
+        m.addLayer({
+          id: "quake-epi", type: "circle", source: "quake-epi-src",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["coalesce", ["get", "mag"], 3], 3, 4, 5, 8, 7, 16],
+            "circle-color": ["interpolate", ["linear"], ["coalesce", ["get", "mag"], 3], 3, "#f1c40f", 5, "#e67e22", 6, "#e74c3c", 7, "#c0392b"],
+            "circle-opacity": 0.9, "circle-stroke-width": 1.5, "circle-stroke-color": "#fff",
+          },
+        });
+        m.on("click", "quake-epi", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          const t = p.time ? String(p.time).replace("T", " ").slice(0, 16) : "";
+          const html = `<div class="qpop"><b>規模 ${p.mag ?? "?"}</b>　深度 ${p.depth ?? "?"} km<br/>${t}<br/>${String(p.location || "").replace(/</g, "")}` +
+            (p.web ? `<br/><a href="${p.web}" target="_blank" rel="noopener noreferrer">氣象署地震報告 ↗</a>` : "") + `</div>`;
+          quakePopRef.current?.remove();
+          quakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m);
+        });
+        m.on("mouseenter", "quake-epi", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "quake-epi", () => { m.getCanvas().style.cursor = ""; });
+      }
+      const hex = quakeHexFC(latest.stations || []);
+      if (m.getSource("quake-col-src")) (m.getSource("quake-col-src") as mapboxgl.GeoJSONSource).setData(hex);
+      else {
+        m.addSource("quake-col-src", { type: "geojson", data: hex });
+        m.addLayer({
+          id: "quake-col", type: "fill-extrusion", source: "quake-col-src",
+          paint: {
+            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "int"], 1, "#9fd98f", 2, "#f7e463", 3, "#f7b14a", 4, "#f2663a", 5, "#e23b3b", 6, "#b3208a", 7, "#7a0fb0"],
+            "fill-extrusion-height": ["*", ["get", "int"], QUAKE_H],
+            "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.82,
+          },
+        });
+      }
+      for (const id of ["quake-ripple", "quake-epi", "quake-col"]) m.setLayoutProperty(id, "visibility", "visible");
+      const labelStations = (latest.stations || []).filter((s: any) => s.int >= 3)
+        .map((s: any) => ({ ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + s.int * QUAKE_H }));
+      setDeckLayers("quake", [new TextLayer({
+        id: "quake-int-text", data: labelStations,
+        getPosition: (s: any) => [s.lon, s.lat, s.z],
+        getText: (s: any) => `${s.name} ${s.intLabel}`,
+        getSize: 12, sizeUnits: "pixels", getColor: [255, 238, 228, 255], billboard: true,
+        fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif', characterSet: "auto",
+        getTextAnchor: "middle", getAlignmentBaseline: "bottom",
+        background: true, getBackgroundColor: [44, 8, 8, 215], backgroundPadding: [5, 3],
+      })]);
+      startRipple();
+      const lt = latest.time ? String(latest.time).replace("T", " ").slice(5, 16) : "";
+      setQuakeOn(true);
+      setQuakeInfo(`最新：規模 ${latest.mag ?? "?"}・${lt}`);
+    } catch { setQuakeInfo("地震讀取失敗"); }
   }
   const BASEMAP_LABEL = { dark: "深色", topo: "地形", sat: "衛星" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
@@ -363,6 +472,10 @@ export default function App() {
         雨量
       </button>
       {rainInfo && <div className="rain-info">{rainInfo}</div>}
+      <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期顯著有感地震：震央漣漪 + 各站震度柱">
+        地震
+      </button>
+      {quakeInfo && <div className="quake-info">{quakeInfo}</div>}
 
       {sel && (
         <div className="panel">
