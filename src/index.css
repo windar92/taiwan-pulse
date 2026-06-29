@@ -185,6 +185,42 @@ body,
 }
 .qpop a { color: #8ab4ff; }
 
+/* 地震模式：左側地震清單 */
+.quake-list {
+  position: absolute;
+  left: 14px;
+  top: 116px;
+  bottom: 70px;
+  z-index: 4;
+  width: 198px;
+  overflow-y: auto;
+  background: rgba(11, 14, 19, 0.82);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 6px;
+  backdrop-filter: blur(6px);
+}
+.quake-list .ql-head {
+  font-size: 11px;
+  color: #9aa6b2;
+  padding: 4px 6px 6px;
+  position: sticky;
+  top: 0;
+}
+.ql-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.ql-item:hover { background: rgba(255, 255, 255, 0.06); }
+.ql-item.sel { background: rgba(214, 40, 40, 0.22); border-left-color: #d62828; }
+.ql-item .ql-date { font-size: 11px; color: #9aa6b2; }
+.ql-item .ql-loc { font-size: 12.5px; color: #e7ecf3; }
+
 .rain-info {
   position: absolute;
   top: 213px;
