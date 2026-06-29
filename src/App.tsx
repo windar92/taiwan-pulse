@@ -245,7 +245,7 @@ export default function App() {
   function rainLabelFC(stations: any[]) {
     const wet = stations.filter((s) => s.r1 > 0);
     const D = 0.1; // 約 11km 內的局部最高
-    const feats: any[] = [];
+    const peaks: any[] = [];
     for (const s of wet) {
       let isPeak = true;
       for (const o of wet) {
@@ -253,8 +253,14 @@ export default function App() {
         const dx = (o.lon - s.lon) * Math.cos((s.lat * Math.PI) / 180), dy = o.lat - s.lat;
         if (Math.hypot(dx, dy) <= D && o.r1 > s.r1) { isPeak = false; break; }
       }
-      if (isPeak) feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: { label: `${Math.round(s.r1)}mm` } });
+      if (isPeak) peaks.push(s);
     }
+    // 只留雨量最顯著的前 10 個區域峰值，避免毛毛雨小站洗版
+    peaks.sort((a, b) => b.r1 - a.r1);
+    const feats = peaks.slice(0, 10).map((s) => ({
+      type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] },
+      properties: { label: `${s.name} ${Math.round(s.r1)}mm` },
+    }));
     return { type: "FeatureCollection", features: feats } as any;
   }
   async function toggleRain() {
