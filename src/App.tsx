@@ -230,7 +230,7 @@ export default function App() {
   // 雨量站 → 六角柱(只畫有雨的站)，高度依近1小時雨量，示意比例
   function rainHexFC(stations: any[]) {
     const feats: any[] = [];
-    const R = 0.035; // 約 3.9km 的示意責任半徑
+    const R = 0.0315; // 約 3.5km 的示意責任半徑
     for (const s of stations) {
       if (!(s.r1 > 0)) continue;
       const kx = R / Math.max(0.2, Math.cos((s.lat * Math.PI) / 180)), ky = R;
@@ -241,18 +241,36 @@ export default function App() {
     }
     return { type: "FeatureCollection", features: feats } as any;
   }
+  // 區域峰值標號：只標「在半徑 D 內雨量最大」的站(各集中區域的最高點)，避免每根都標
+  function rainLabelFC(stations: any[]) {
+    const wet = stations.filter((s) => s.r1 > 0);
+    const D = 0.1; // 約 11km 內的局部最高
+    const feats: any[] = [];
+    for (const s of wet) {
+      let isPeak = true;
+      for (const o of wet) {
+        if (o === s) continue;
+        const dx = (o.lon - s.lon) * Math.cos((s.lat * Math.PI) / 180), dy = o.lat - s.lat;
+        if (Math.hypot(dx, dy) <= D && o.r1 > s.r1) { isPeak = false; break; }
+      }
+      if (isPeak) feats.push({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: { label: `${Math.round(s.r1)}mm` } });
+    }
+    return { type: "FeatureCollection", features: feats } as any;
+  }
   async function toggleRain() {
     const m = mapRef.current; if (!m) return;
     const on = !rainOn;
     if (!on) {
-      if (m.getLayer("rain-col")) m.setLayoutProperty("rain-col", "visibility", "none");
+      for (const id of ["rain-col", "rain-label"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
       setRainOn(false); setRainInfo("");
       return;
     }
     try {
       const d = await fetch("/api/weather").then((r) => r.json());
-      if (!d.ok) { setRainInfo(d.error === "CWA_KEY 未設定" ? "雨量未啟用：請在 Vercel 設定 CWA_KEY" : "雨量資料讀取失敗"); return; }
-      const fc = rainHexFC(d.stations || []);
+      if (!d.ok) { setRainInfo(d.error === "CWA_KEY 未設定" ? "雨量未啟用：請設定 CWA_KEY" : "雨量讀取失敗"); return; }
+      const stations = d.stations || [];
+      const fc = rainHexFC(stations);
+      const labels = rainLabelFC(stations);
       if (m.getSource("rain")) (m.getSource("rain") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("rain", { type: "geojson", data: fc });
@@ -266,11 +284,19 @@ export default function App() {
           },
         });
       }
-      m.setLayoutProperty("rain-col", "visibility", "visible");
-      const wet = fc.features.length;
+      if (m.getSource("rain-lab")) (m.getSource("rain-lab") as mapboxgl.GeoJSONSource).setData(labels);
+      else {
+        m.addSource("rain-lab", { type: "geojson", data: labels });
+        m.addLayer({
+          id: "rain-label", type: "symbol", source: "rain-lab",
+          layout: { "text-field": ["get", "label"], "text-size": 12.5, "text-anchor": "bottom", "text-offset": [0, -0.4], "text-allow-overlap": true, "text-ignore-placement": true },
+          paint: { "text-color": "#eaf4ff", "text-halo-color": "#06101f", "text-halo-width": 1.6 },
+        });
+      }
+      for (const id of ["rain-col", "rain-label"]) m.setLayoutProperty(id, "visibility", "visible");
       setRainOn(true);
-      setRainInfo(wet ? `雨量：${wet} 站有雨${d.time ? "・" + String(d.time).slice(11, 16) : ""}` : "目前全台無明顯降雨");
-    } catch { setRainInfo("雨量資料讀取失敗"); }
+      setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
+    } catch { setRainInfo("雨量讀取失敗"); }
   }
   const BASEMAP_LABEL = { dark: "深色", topo: "地形", sat: "衛星" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
@@ -287,7 +313,11 @@ export default function App() {
   return (
     <>
       <div id="map" ref={containerRef} />
-      <div className="brand"><strong>台灣情報脈動</strong><span>各地即時消息與公部門公開資料</span></div>
+      <div className="brand">
+        <strong>台灣情報脈動</strong>
+        <span>各地即時消息與公部門公開資料</span>
+        <span className="brand-range">新聞與公告：近 7 天　·　群眾回報：近 14 天</span>
+      </div>
 
       {terrainBlocked && !hintDismissed && (
         <div className="terrain-hint">
