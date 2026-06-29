@@ -48,6 +48,8 @@ export default function App() {
   const [optOrder, setOptOrder] = useState<string[]>(REPORT_OPTIONS);
   const [terrainBlocked, setTerrainBlocked] = useState(false);
   const [hintDismissed, setHintDismissed] = useState(false);
+  const [rainOn, setRainOn] = useState(false);
+  const [rainInfo, setRainInfo] = useState<string>("");
 
   const refreshOrder = () =>
     fetch("/api/feedback").then((r) => r.json()).then((d) => {
@@ -224,6 +226,52 @@ export default function App() {
   function cycleBasemap() {
     applyBasemap(basemap === "dark" ? "topo" : basemap === "topo" ? "sat" : "dark");
   }
+
+  // 雨量站 → 六角柱(只畫有雨的站)，高度依近1小時雨量，示意比例
+  function rainHexFC(stations: any[]) {
+    const feats: any[] = [];
+    const R = 0.035; // 約 3.9km 的示意責任半徑
+    for (const s of stations) {
+      if (!(s.r1 > 0)) continue;
+      const kx = R / Math.max(0.2, Math.cos((s.lat * Math.PI) / 180)), ky = R;
+      const ring: number[][] = [];
+      for (let i = 0; i < 6; i++) { const a = (Math.PI / 180) * (60 * i - 30); ring.push([s.lon + kx * Math.cos(a), s.lat + ky * Math.sin(a)]); }
+      ring.push(ring[0]);
+      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { r1: s.r1, now: s.now, r24: s.r24, name: s.name } });
+    }
+    return { type: "FeatureCollection", features: feats } as any;
+  }
+  async function toggleRain() {
+    const m = mapRef.current; if (!m) return;
+    const on = !rainOn;
+    if (!on) {
+      if (m.getLayer("rain-col")) m.setLayoutProperty("rain-col", "visibility", "none");
+      setRainOn(false); setRainInfo("");
+      return;
+    }
+    try {
+      const d = await fetch("/api/weather").then((r) => r.json());
+      if (!d.ok) { setRainInfo(d.error === "CWA_KEY 未設定" ? "雨量未啟用：請在 Vercel 設定 CWA_KEY" : "雨量資料讀取失敗"); return; }
+      const fc = rainHexFC(d.stations || []);
+      if (m.getSource("rain")) (m.getSource("rain") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("rain", { type: "geojson", data: fc });
+        m.addLayer({
+          id: "rain-col", type: "fill-extrusion", source: "rain",
+          paint: {
+            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "r1"], 0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"],
+            "fill-extrusion-height": ["*", ["get", "r1"], 700],
+            "fill-extrusion-base": 0,
+            "fill-extrusion-opacity": 0.78,
+          },
+        });
+      }
+      m.setLayoutProperty("rain-col", "visibility", "visible");
+      const wet = fc.features.length;
+      setRainOn(true);
+      setRainInfo(wet ? `雨量：${wet} 站有雨${d.time ? "・" + String(d.time).slice(11, 16) : ""}` : "目前全台無明顯降雨");
+    } catch { setRainInfo("雨量資料讀取失敗"); }
+  }
   const BASEMAP_LABEL = { dark: "深色", topo: "地形", sat: "衛星" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
@@ -256,6 +304,10 @@ export default function App() {
       <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：深色 → 地形(等高線) → 衛星實景">
         {BASEMAP_LABEL[basemap]}
       </button>
+      <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱(近1小時雨量)">
+        雨量
+      </button>
+      {rainInfo && <div className="rain-info">{rainInfo}</div>}
 
       {sel && (
         <div className="panel">
