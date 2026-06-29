@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { TextLayer } from "@deck.gl/layers";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
+const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
 
 type Cat = "disaster" | "safety" | "warning" | "defense" | "policy" | "ecology" | "activity" | "report";
 const CATS: { id: Cat; label: string; color: string }[] = [
@@ -50,6 +53,11 @@ export default function App() {
   const [hintDismissed, setHintDismissed] = useState(false);
   const [rainOn, setRainOn] = useState(false);
   const [rainInfo, setRainInfo] = useState<string>("");
+  const [quakeOn, setQuakeOn] = useState(false);
+  const [quakeInfo, setQuakeInfo] = useState<string>("");
+  const rippleRef = useRef<number | null>(null);
+  const quakePopRef = useRef<mapboxgl.Popup | null>(null);
+  const deckRef = useRef<any>(null);
 
   const refreshOrder = () =>
     fetch("/api/feedback").then((r) => r.json()).then((d) => {
@@ -241,10 +249,10 @@ export default function App() {
     }
     return { type: "FeatureCollection", features: feats } as any;
   }
-  // 區域峰值標號：只標「在半徑 D 內雨量最大」的站(各集中區域的最高點)，避免每根都標
-  function rainLabelFC(stations: any[]) {
+  // 區域峰值：只取「在半徑 D 內雨量最大」的站，再留前 10 名(避免毛毛雨小站洗版)
+  function rainPeaks(stations: any[]) {
     const wet = stations.filter((s) => s.r1 > 0);
-    const D = 0.1; // 約 11km 內的局部最高
+    const D = 0.1;
     const peaks: any[] = [];
     for (const s of wet) {
       let isPeak = true;
@@ -255,19 +263,20 @@ export default function App() {
       }
       if (isPeak) peaks.push(s);
     }
-    // 只留雨量最顯著的前 10 個區域峰值，避免毛毛雨小站洗版
     peaks.sort((a, b) => b.r1 - a.r1);
-    const feats = peaks.slice(0, 10).map((s) => ({
-      type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] },
-      properties: { label: `${s.name} ${Math.round(s.r1)}mm` },
-    }));
-    return { type: "FeatureCollection", features: feats } as any;
+    return peaks.slice(0, 10);
+  }
+  function ensureDeck() {
+    const m = mapRef.current; if (!m) return null;
+    if (!deckRef.current) { deckRef.current = new MapboxOverlay({ interleaved: false, layers: [] }); m.addControl(deckRef.current as any); }
+    return deckRef.current;
   }
   async function toggleRain() {
     const m = mapRef.current; if (!m) return;
     const on = !rainOn;
     if (!on) {
-      for (const id of ["rain-col", "rain-label"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none");
+      if (m.getLayer("rain-col")) m.setLayoutProperty("rain-col", "visibility", "none");
+      if (deckRef.current) deckRef.current.setProps({ layers: [] });
       setRainOn(false); setRainInfo("");
       return;
     }
@@ -276,7 +285,6 @@ export default function App() {
       if (!d.ok) { setRainInfo(d.error === "CWA_KEY 未設定" ? "雨量未啟用：請設定 CWA_KEY" : "雨量讀取失敗"); return; }
       const stations = d.stations || [];
       const fc = rainHexFC(stations);
-      const labels = rainLabelFC(stations);
       if (m.getSource("rain")) (m.getSource("rain") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("rain", { type: "geojson", data: fc });
@@ -284,22 +292,33 @@ export default function App() {
           id: "rain-col", type: "fill-extrusion", source: "rain",
           paint: {
             "fill-extrusion-color": ["interpolate", ["linear"], ["get", "r1"], 0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"],
-            "fill-extrusion-height": ["*", ["get", "r1"], 700],
+            "fill-extrusion-height": ["*", ["get", "r1"], RAIN_H],
             "fill-extrusion-base": 0,
             "fill-extrusion-opacity": 0.78,
           },
         });
       }
-      if (m.getSource("rain-lab")) (m.getSource("rain-lab") as mapboxgl.GeoJSONSource).setData(labels);
-      else {
-        m.addSource("rain-lab", { type: "geojson", data: labels });
-        m.addLayer({
-          id: "rain-label", type: "symbol", source: "rain-lab",
-          layout: { "text-field": ["get", "label"], "text-size": 12.5, "text-anchor": "bottom", "text-offset": [0, -0.4], "text-allow-overlap": true, "text-ignore-placement": true },
-          paint: { "text-color": "#eaf4ff", "text-halo-color": "#06101f", "text-halo-width": 1.6 },
-        });
-      }
-      for (const id of ["rain-col", "rain-label"]) m.setLayoutProperty(id, "visibility", "visible");
+      m.setLayoutProperty("rain-col", "visibility", "visible");
+      // 數字標號用 deck.gl 放在 [經度,緯度,地形高+柱高] 的 3D 位置，貼在水柱真實頂端
+      const peaks = rainPeaks(stations).map((s: any) => ({
+        ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + s.r1 * RAIN_H,
+      }));
+      const deck = ensureDeck();
+      if (deck) deck.setProps({
+        layers: [new TextLayer({
+          id: "rain-peak-text",
+          data: peaks,
+          getPosition: (d: any) => [d.lon, d.lat, d.z],
+          getText: (d: any) => `${d.name} ${Math.round(d.r1)}mm`,
+          getSize: 13, sizeUnits: "pixels",
+          getColor: [234, 244, 255, 255],
+          billboard: true,
+          fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif',
+          characterSet: "auto",
+          getTextAnchor: "middle", getAlignmentBaseline: "bottom",
+          background: true, getBackgroundColor: [6, 16, 31, 210], backgroundPadding: [5, 3],
+        })],
+      });
       setRainOn(true);
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
