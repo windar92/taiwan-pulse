@@ -10,11 +10,11 @@ const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/j
 const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
 function qDate(t: string) { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function qLoc(s: string) { if (!s) return ""; const m = String(s).match(/位於(.+?)\)/); return m ? m[1] : String(s).slice(0, 10); }
-// 中央氣象署震度色階(1→7級)
+// 震度色階(1→7級)，色相分明
 const INT_COLORS: Record<number, number[]> = {
-  1: [150, 210, 140], 2: [120, 200, 90], 3: [245, 210, 70], 4: [245, 165, 60], 5: [235, 80, 45], 6: [196, 35, 42], 7: [139, 47, 160],
+  1: [80, 200, 120], 2: [160, 220, 60], 3: [255, 214, 0], 4: [255, 138, 0], 5: [240, 50, 30], 6: [214, 0, 110], 7: [140, 40, 180],
 };
-const INT_HEX = ["#96d28c", "#78c85a", "#f5d246", "#f5a53c", "#eb502d", "#c4232a", "#8b2fa0"]; // 1..7
+const INT_HEX = ["#50c878", "#a0dc3c", "#ffd600", "#ff8a00", "#f0321e", "#d6006e", "#8c28b4"]; // 1..7
 
 type Cat = "disaster" | "safety" | "warning" | "defense" | "policy" | "ecology" | "activity" | "report";
 const CATS: { id: Cat; label: string; color: string }[] = [
@@ -339,7 +339,7 @@ export default function App() {
   }
   // 以各站震度做 IDW 空間內插，建出規則網格(資料空白區設 0，讓等高線收在有感範圍內)
   function idwGrid(stations: any[]) {
-    const x0 = 119.2, x1 = 122.4, y0 = 21.7, y1 = 25.5, dx = 0.035, dy = 0.035;
+    const x0 = 119.2, x1 = 122.4, y0 = 21.7, y1 = 25.5, dx = 0.02, dy = 0.02;
     const nx = Math.ceil((x1 - x0) / dx) + 1, ny = Math.ceil((y1 - y0) / dy) + 1;
     const g = new Float32Array(nx * ny);
     const maxD2 = 0.4 * 0.4;
@@ -363,21 +363,30 @@ export default function App() {
     const G = idwGrid(stations);
     const { g, nx, ny, x0, y0, dx, dy } = G;
     const x1 = x0 + (nx - 1) * dx, y1 = y0 + (ny - 1) * dy;
-    let cv = intCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); intCanvasRef.current = cv; }
-    cv.width = nx; cv.height = ny;
-    const ctx = cv.getContext("2d")!; const img = ctx.createImageData(nx, ny);
+    // 先畫到網格大小的小 canvas
+    const small = document.createElement("canvas"); small.width = nx; small.height = ny;
+    const sctx = small.getContext("2d")!; const img = sctx.createImageData(nx, ny);
     for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
       const v = g[j * nx + i], row = ny - 1 - j, o = (row * nx + i) * 4;
       if (v < 1) { img.data[o + 3] = 0; continue; }
       const c = INT_COLORS[Math.max(1, Math.min(7, Math.round(v)))];
-      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 165;
+      img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 200;
     }
-    ctx.putImageData(img, 0, 0);
+    sctx.putImageData(img, 0, 0);
+    // 放大 + 模糊 → 邊緣平滑不鋸齒
+    let cv = intCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); intCanvasRef.current = cv; }
+    const scale = 4; cv.width = nx * scale; cv.height = ny * scale;
+    const ctx = cv.getContext("2d")!;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    ctx.imageSmoothingEnabled = true; (ctx as any).imageSmoothingQuality = "high";
+    ctx.filter = "blur(7px)";
+    ctx.drawImage(small, 0, 0, cv.width, cv.height);
+    ctx.filter = "none";
     return { url: cv.toDataURL(), coords: [[x0, y1], [x1, y1], [x1, y0], [x0, y0]] as any };
   }
   // 所有有感測站的點
   function quakeStationsFC(stations: any[]) {
-    return { type: "FeatureCollection", features: stations.map((s) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: { int: s.int, intLabel: s.intLabel, name: s.name } })) } as any;
+    return { type: "FeatureCollection", features: stations.map((s) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lon, s.lat] }, properties: { int: s.int, lbl: String(s.intLabel || s.int).replace("級", ""), name: s.name } })) } as any;
   }
   function stopRipple() { if (rippleRef.current != null) { cancelAnimationFrame(rippleRef.current); rippleRef.current = null; } }
   function startRipple() {
@@ -427,12 +436,9 @@ export default function App() {
         m.addLayer({ id: "quake-shake-layer", type: "raster", source: "quake-shake", paint: { "raster-opacity": 0.6, "raster-resampling": "linear", "raster-fade-duration": 0 } });
         m.addSource("quake-sta-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         m.addLayer({
-          id: "quake-sta", type: "circle", source: "quake-sta-src",
-          paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2, 11, 3.5],
-            "circle-color": ["interpolate", ["linear"], ["get", "int"], 1, "#96d28c", 2, "#78c85a", 3, "#f5d246", 4, "#f5a53c", 5, "#eb502d", 6, "#c4232a", 7, "#8b2fa0"],
-            "circle-opacity": 0.85, "circle-stroke-width": 0.5, "circle-stroke-color": "rgba(0,0,0,0.4)",
-          },
+          id: "quake-sta", type: "symbol", source: "quake-sta-src",
+          layout: { "text-field": ["get", "lbl"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 11, 11, 16], "text-allow-overlap": false },
+          paint: { "text-color": "#ffffff", "text-halo-color": "#000000", "text-halo-width": 1.8 },
         });
       }
       if (!m.getSource("quake-epi-src")) {
