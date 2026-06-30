@@ -187,6 +187,48 @@ body,
 }
 .temp-btn.on { background: linear-gradient(90deg, #2166ac, #b2182b); color: #fff; }
 .temp-btn:hover { filter: brightness(1.05); }
+
+.sta-btn {
+  position: absolute;
+  top: 324px;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.sta-btn.on { background: #455a64; color: #fff; }
+.sta-btn:hover { filter: brightness(1.05); }
+.sta-panel {
+  position: absolute;
+  top: 324px;
+  right: 56px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(11, 14, 19, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  backdrop-filter: blur(6px);
+}
+.sta-panel .sta-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: #e7ecf3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sta-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
 .temp-info {
   position: absolute;
   top: 289px;

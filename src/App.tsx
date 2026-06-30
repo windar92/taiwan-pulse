@@ -65,6 +65,9 @@ export default function App() {
   const [quakeInfo, setQuakeInfo] = useState<string>("");
   const [tempOn, setTempOn] = useState(false);
   const [tempInfo, setTempInfo] = useState<string>("");
+  const [staOn, setStaOn] = useState(false);
+  const [staTypes, setStaTypes] = useState<Set<string>>(new Set(["weather", "rain", "quake"]));
+  const staPopRef = useRef<mapboxgl.Popup | null>(null);
   const [quakeList, setQuakeList] = useState<any[]>([]);
   const [quakeSel, setQuakeSel] = useState(0);
   const rippleRef = useRef<number | null>(null);
@@ -340,6 +343,56 @@ export default function App() {
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
   }
+  // ===== 整合測站圖層(氣象/雨量/地震，可自選) =====
+  function ptsFC(arr: any[]) {
+    return { type: "FeatureCollection", features: arr.map((a) => ({ type: "Feature", geometry: { type: "Point", coordinates: [a.lon, a.lat] }, properties: a.p })) } as any;
+  }
+  function openStaPopup(f: any) {
+    const m = mapRef.current; if (!m) return; const p = f.properties as any;
+    const cwa = '<a href="https://www.cwa.gov.tw/V8/C/W/Observe/Observe.html" target="_blank" rel="noopener noreferrer">中央氣象署觀測 ↗</a>';
+    let html = "";
+    if (p.kind === "weather") html = `<div class="qpop"><b>${p.name}</b>　氣象站<br/>${p.county || ""}${p.town || ""}<br/>氣溫 ${p.temp ?? "-"}°C・${p.weather || ""}<br/>風 ${p.wind ?? "-"} m/s・濕度 ${p.humidity ?? "-"}%<br/>氣壓 ${p.pressure ?? "-"} hPa・時雨量 ${p.rain ?? "-"} mm<br/>${cwa}</div>`;
+    else if (p.kind === "rain") html = `<div class="qpop"><b>${p.name}</b>　雨量站<br/>${p.county || ""}${p.town || ""}<br/>近1時 ${p.r1 ?? "-"} mm・今日 ${p.now ?? "-"} mm・24時 ${p.r24 ?? "-"} mm<br/>${cwa}</div>`;
+    else html = `<div class="qpop"><b>${p.name}</b>　地震測站</div>`;
+    staPopRef.current?.remove();
+    staPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m);
+  }
+  function applyStaVis(on: boolean, types: Set<string>) {
+    const m = mapRef.current; if (!m) return;
+    for (const t of ["weather", "rain", "quake"]) { const id = "sta-" + t; if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on && types.has(t) ? "visible" : "none"); }
+  }
+  function toggleStaType(t: string) {
+    setStaTypes((prev) => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); applyStaVis(staOn, n); return n; });
+  }
+  async function toggleSta() {
+    const m = mapRef.current; if (!m) return;
+    const on = !staOn;
+    if (!on) { applyStaVis(false, staTypes); staPopRef.current?.remove(); setStaOn(false); return; }
+    if (!m.getSource("sta-weather-src")) {
+      const [aw, ar, aq] = await Promise.all([
+        fetch("/api/airtemp").then((r) => r.json()).catch(() => ({ stations: [] })),
+        fetch("/api/weather").then((r) => r.json()).catch(() => ({ stations: [] })),
+        fetch("/api/quake").then((r) => r.json()).catch(() => ({ quakes: [] })),
+      ]);
+      const wfc = ptsFC((aw.stations || []).map((s: any) => ({ lon: s.lon, lat: s.lat, p: { kind: "weather", name: s.name, temp: s.temp, weather: s.weather, wind: s.wind, humidity: s.humidity, pressure: s.pressure, rain: s.rain, county: s.county, town: s.town } })));
+      const rfc = ptsFC((ar.stations || []).map((s: any) => ({ lon: s.lon, lat: s.lat, p: { kind: "rain", name: s.name, r1: s.r1, now: s.now, r24: s.r24, county: s.county, town: s.town } })));
+      const seen = new Set(), qs: any[] = [];
+      for (const q of (aq.quakes || [])) for (const s of (q.stations || [])) { const k = s.name + "," + s.lat + "," + s.lon; if (seen.has(k)) continue; seen.add(k); qs.push({ lon: s.lon, lat: s.lat, p: { kind: "quake", name: s.name } }); }
+      m.addSource("sta-weather-src", { type: "geojson", data: wfc });
+      m.addSource("sta-rain-src", { type: "geojson", data: rfc });
+      m.addSource("sta-quake-src", { type: "geojson", data: ptsFC(qs) });
+      const addCircle = (id: string, src: string, color: string) => {
+        m.addLayer({ id, type: "circle", source: src, paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 4.5], "circle-color": color, "circle-opacity": 0.9, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(0,0,0,0.5)" } });
+        m.on("click", id, (e) => { const f = e.features?.[0]; if (f) openStaPopup(f); });
+        m.on("mouseenter", id, () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", id, () => { m.getCanvas().style.cursor = ""; });
+      };
+      addCircle("sta-weather", "sta-weather-src", "#ff8a3d");
+      addCircle("sta-rain", "sta-rain-src", "#3da5ff");
+      addCircle("sta-quake", "sta-quake-src", "#b07cff");
+    }
+    applyStaVis(true, staTypes); setStaOn(true);
+  }
   // 氣溫站 → 六角柱(高度依氣溫，色彩以 20°C 為中點:藍冷紅熱)
   function tempHexFC(stations: any[]) {
     const feats: any[] = []; const R = 0.0315;
@@ -573,6 +626,19 @@ export default function App() {
         氣溫
       </button>
       {tempInfo && <div className="temp-info">{tempInfo}</div>}
+      <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)，點站看最新數據">
+        測站
+      </button>
+      {staOn && (
+        <div className="sta-panel">
+          {([["weather", "氣象站", "#ff8a3d"], ["rain", "雨量站", "#3da5ff"], ["quake", "地震站", "#b07cff"]] as const).map(([k, label, c]) => (
+            <label key={k} className="sta-opt">
+              <input type="checkbox" checked={staTypes.has(k)} onChange={() => toggleStaType(k)} />
+              <span className="sta-dot" style={{ background: c }} />{label}
+            </label>
+          ))}
+        </div>
+      )}
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">
