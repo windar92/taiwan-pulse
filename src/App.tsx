@@ -73,6 +73,11 @@ export default function App() {
   const [typhoonInfo, setTyphoonInfo] = useState<string>("");
   const [oceanOn, setOceanOn] = useState(false);
   const [oceanInfo, setOceanInfo] = useState<string>("");
+  const [riversOn, setRiversOn] = useState(false);
+  const riverPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [shipsOn, setShipsOn] = useState(false);
+  const [shipsInfo, setShipsInfo] = useState<string>("");
+  const shipPopRef = useRef<mapboxgl.Popup | null>(null);
   const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const hoverIdRef = useRef<{ rain: any; temp: any }>({ rain: null, temp: null });
   const [quakeList, setQuakeList] = useState<any[]>([]);
@@ -371,6 +376,53 @@ export default function App() {
       setRainOn(true);
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
+  }
+  // ===== 中國船舶 AIS 圖層(叢集) =====
+  async function toggleShips() {
+    const m = mapRef.current; if (!m) return;
+    const on = !shipsOn;
+    const ids = ["ships-cluster", "ships-count", "ships-pt"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); shipPopRef.current?.remove(); setShipsOn(false); setShipsInfo(""); return; }
+    try {
+      const d = await fetch("/api/ships").then((r) => r.json());
+      if (!d.ok) { setShipsInfo("船舶未啟用：請設定 AISSTREAM_KEY"); return; }
+      const fc = { type: "FeatureCollection", features: (d.ships || []).filter((s: any) => typeof s.lng === "number").map((s: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lng, s.lat] }, properties: { name: s.name || s.mmsi, cls: s.cls || "其他", mmsi: s.mmsi, sog: s.sog, type: s.shiptype } })) } as any;
+      if (m.getSource("ships-src")) (m.getSource("ships-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("ships-src", { type: "geojson", data: fc, cluster: true, clusterRadius: 42, clusterMaxZoom: 9 });
+        m.addLayer({ id: "ships-cluster", type: "circle", source: "ships-src", filter: ["has", "point_count"], paint: { "circle-color": "rgba(200,40,40,0.55)", "circle-radius": ["step", ["get", "point_count"], 12, 50, 18, 300, 26], "circle-stroke-width": 1, "circle-stroke-color": "rgba(255,255,255,0.6)" } });
+        m.addLayer({ id: "ships-count", type: "symbol", source: "ships-src", filter: ["has", "point_count"], layout: { "text-field": ["get", "point_count_abbreviated"], "text-size": 12 }, paint: { "text-color": "#fff" } });
+        m.addLayer({ id: "ships-pt", type: "circle", source: "ships-src", filter: ["!", ["has", "point_count"]], paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 5], "circle-color": ["match", ["get", "cls"], "軍事", "#e53935", "油輪/化學船", "#fb8c00", "貨船", "#1e88e5", "漁船", "#43a047", "客船", "#8e24aa", "拖船作業", "#00897b", "#b0bec5"], "circle-opacity": 0.9, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(0,0,0,0.5)" } });
+        m.on("click", "ships-cluster", (e) => { const f = m.queryRenderedFeatures(e.point, { layers: ["ships-cluster"] })[0]; const cid = f.properties!.cluster_id; (m.getSource("ships-src") as any).getClusterExpansionZoom(cid, (err: any, z: number) => { if (!err) m.easeTo({ center: (f.geometry as any).coordinates, zoom: z }); }); });
+        m.on("click", "ships-pt", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const html = `<div class="qpop"><b>${p.name}</b>　${p.cls}<br/>MMSI ${p.mmsi}<br/>航速 ${p.sog ?? "-"} kn</div>`; shipPopRef.current?.remove(); shipPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m); });
+        m.on("mouseenter", "ships-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "ships-pt", () => { m.getCanvas().style.cursor = ""; });
+      }
+      for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+      setShipsOn(true); setShipsInfo(d.count ? `中國籍船舶 ${d.count} 艘(近3小時)` : "尚無資料(收集器每10分鐘更新)");
+    } catch { setShipsInfo("船舶讀取失敗"); }
+  }
+  // ===== 河流圖層(用 Mapbox 底圖 waterway，常態畫線 + 河名 + hover 高亮整條) =====
+  function toggleRivers() {
+    const m = mapRef.current; if (!m) return;
+    const on = !riversOn;
+    const ids = ["rivers-line", "rivers-hl", "rivers-label"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); riverPopRef.current?.remove(); setRiversOn(false); return; }
+    if (!m.getLayer("rivers-line")) {
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "rivers-line", type: "line", source: "composite", "source-layer": "waterway", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4aa3df", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 11, 2], "line-opacity": 0.85 } }, beforeId);
+      m.addLayer({ id: "rivers-hl", type: "line", source: "composite", "source-layer": "waterway", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 6], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
+      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name"]], "text-size": 11, "text-allow-overlap": false }, paint: { "text-color": "#bfe9ff", "text-halo-color": "#06203f", "text-halo-width": 1.4 } });
+      m.on("mousemove", "rivers-line", (e) => {
+        const f = e.features?.[0]; if (!f) return; const nm = (f.properties as any)?.name; if (!nm) return;
+        m.setFilter("rivers-hl", ["==", ["get", "name"], nm]);
+        riverPopRef.current?.remove();
+        riverPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat(e.lngLat).setText(nm).addTo(m);
+      });
+      m.on("mouseleave", "rivers-line", () => { m.setFilter("rivers-hl", ["==", ["get", "name"], "___none___"]); riverPopRef.current?.remove(); });
+    }
+    for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+    setRiversOn(true);
   }
   // ===== 颱風圖層 =====
   function quadPoly(lon: number, lat: number, q: any) {
@@ -785,6 +837,13 @@ export default function App() {
         海溫
       </button>
       {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
+      <button className={"river-btn" + (riversOn ? " on" : "")} onClick={toggleRivers} title="溪流河川:常態畫線+河名，滑過高亮整條">
+        河流
+      </button>
+      <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">
+        中國船
+      </button>
+      {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
       {oceanOn && (
         <div className="sst-legend">
           <span className="qlg-title">海溫°C</span>
