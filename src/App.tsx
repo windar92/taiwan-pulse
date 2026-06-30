@@ -78,6 +78,9 @@ export default function App() {
   const [shipsOn, setShipsOn] = useState(false);
   const [shipsInfo, setShipsInfo] = useState<string>("");
   const shipPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [peaksOn, setPeaksOn] = useState(false);
+  const [peaksInfo, setPeaksInfo] = useState<string>("");
+  const peakPopRef = useRef<mapboxgl.Popup | null>(null);
   const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const hoverIdRef = useRef<{ rain: any; temp: any }>({ rain: null, temp: null });
   const [quakeList, setQuakeList] = useState<any[]>([]);
@@ -423,6 +426,38 @@ export default function App() {
     }
     for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
     setRiversOn(true);
+  }
+  // ===== 山岳圖層(百岳/高山，OSM 名稱+標高) =====
+  async function togglePeaks() {
+    const m = mapRef.current; if (!m) return;
+    const on = !peaksOn;
+    const ids = ["peaks-pt", "peaks-label", "peaks-hl"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); peakPopRef.current?.remove(); setPeaksOn(false); setPeaksInfo(""); return; }
+    try {
+      const d = await fetch("/api/peaks?min=1000").then((r) => r.json());
+      if (!d.ok || !(d.peaks || []).length) { setPeaksInfo("山岳資料暫時無法取得"); return; }
+      const fc = { type: "FeatureCollection", features: d.peaks.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lng, p.lat] }, properties: { name: p.name, ele: p.ele, tier: p.tier } })) } as any;
+      if (m.getSource("peaks-src")) (m.getSource("peaks-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("peaks-src", { type: "geojson", data: fc, generateId: true });
+        const colorByTier = ["match", ["get", "tier"], "百岳級", "#ffd54f", "高山", "#ff8a65", "中級山", "#a5d6a7", "#cfd8dc"];
+        m.addLayer({ id: "peaks-hl", type: "circle", source: "peaks-src", filter: ["==", ["get", "name"], "___none___"], paint: { "circle-radius": 12, "circle-color": "rgba(255,255,255,0.25)", "circle-stroke-color": "#fff", "circle-stroke-width": 2 } });
+        m.addLayer({ id: "peaks-pt", type: "circle", source: "peaks-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, ["case", [">=", ["get", "ele"], 3000], 3.5, 2], 11, ["case", [">=", ["get", "ele"], 3000], 6, 4]], "circle-color": colorByTier as any, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(0,0,0,0.55)", "circle-opacity": 0.95 } });
+        m.addLayer({ id: "peaks-label", type: "symbol", source: "peaks-src", minzoom: 7, layout: { "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 9, 12, 13], "text-offset": [0, 0.9], "text-anchor": "top", "text-allow-overlap": false, "symbol-sort-key": ["-", 4000, ["get", "ele"]] }, paint: { "text-color": "#fff3c4", "text-halo-color": "#2b2300", "text-halo-width": 1.4 } });
+        m.on("mousemove", "peaks-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          m.setFilter("peaks-hl", ["==", ["get", "name"], p.name]);
+          m.getCanvas().style.cursor = "pointer";
+          peakPopRef.current?.remove();
+          peakPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 10, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(`<div class="qpop"><b>${p.name}</b><br/>標高 ${p.ele} m　<span style="opacity:.8">${p.tier}</span></div>`).addTo(m);
+        });
+        m.on("mouseleave", "peaks-pt", () => { m.setFilter("peaks-hl", ["==", ["get", "name"], "___none___"]); m.getCanvas().style.cursor = ""; peakPopRef.current?.remove(); });
+      }
+      for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
+      const n3 = d.peaks.filter((p: any) => p.ele >= 3000).length;
+      setPeaksInfo(`山岳 ${d.peaks.length} 座(其中 ≥3000m ${n3} 座)`);
+      setPeaksOn(true);
+    } catch { setPeaksInfo("山岳資料載入失敗"); }
   }
   // ===== 颱風圖層 =====
   function quadPoly(lon: number, lat: number, q: any) {
@@ -844,6 +879,10 @@ export default function App() {
         中國船
       </button>
       {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
+      <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:OSM 名稱+標高，≥3000m 為百岳級，滑過高亮">
+        山岳
+      </button>
+      {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
       {oceanOn && (
         <div className="sst-legend">
           <span className="qlg-title">海溫°C</span>
