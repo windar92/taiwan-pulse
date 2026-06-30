@@ -112,6 +112,8 @@ export default function App() {
       container: containerRef.current, style: "mapbox://styles/mapbox/dark-v11",
       projection: { name: "mercator" }, center: [home.lng, home.lat], zoom: home.zoom || 7.3,
       pitch: home.pitch ?? 60, bearing: home.bearing ?? 0, maxPitch: 85,
+      // 專注東亞(蒙古—印尼、+8/+9 時區);範圍外不可平移、不載入，降低負載
+      maxBounds: [[105, -12], [147, 53]], minZoom: 4,
     });
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
@@ -133,6 +135,7 @@ export default function App() {
           map.addSource("mapbox-dem", { type: "raster-dem", url: "mapbox://mapbox.mapbox-terrain-dem-v1", tileSize: 512, maxzoom: 14 });
         }
         map.setTerrain({ source: "mapbox-dem", exaggeration: 1.0 });
+        try { map.setFog({ range: [1.5, 10], color: "#0b0e13", "high-color": "#11151c", "horizon-blend": 0.25, "space-color": "#06080c", "star-intensity": 0 } as any); } catch {}
         if (!map.getLayer("sky")) {
           map.addLayer({ id: "sky", type: "sky", paint: { "sky-type": "atmosphere", "sky-atmosphere-sun": [0.0, 88.0], "sky-atmosphere-sun-intensity": 8 } });
         }
@@ -267,7 +270,7 @@ export default function App() {
       const ring: number[][] = [];
       for (let i = 0; i < 6; i++) { const a = (Math.PI / 180) * (60 * i - 30); ring.push([s.lon + kx * Math.cos(a), s.lat + ky * Math.sin(a)]); }
       ring.push(ring[0]);
-      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { r1: s.r1, now: s.now, r24: s.r24, name: s.name } });
+      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { r1: s.r1, now: s.now, r24: s.r24, name: s.name, cx: s.lon, cy: s.lat } });
     }
     return { type: "FeatureCollection", features: feats } as any;
   }
@@ -292,6 +295,17 @@ export default function App() {
     const m = mapRef.current; if (!m) return null;
     if (!deckRef.current) { deckRef.current = new MapboxOverlay({ interleaved: false, layers: [] }); m.addControl(deckRef.current as any); }
     return deckRef.current;
+  }
+  // 滑鼠移過柱子時，在柱頂顯示該柱數值(deck 3D 文字)
+  function hoverTip(lon: number, lat: number, z: number, text: string) {
+    return new TextLayer({
+      id: "hover-tip-deck", data: [{ lon, lat, z }],
+      getPosition: (d: any) => [d.lon, d.lat, d.z], getText: () => text,
+      getSize: 13, sizeUnits: "pixels", getColor: [255, 255, 255, 255], billboard: true,
+      fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif', characterSet: "auto",
+      getTextAnchor: "middle", getAlignmentBaseline: "bottom",
+      background: true, getBackgroundColor: [20, 20, 24, 235], backgroundPadding: [6, 3],
+    });
   }
   // 多個圖層(雨量標號、地震標號…)共用同一個 deck overlay，用登記表合併
   function setDeckLayers(key: string, layers: any[]) {
@@ -325,6 +339,8 @@ export default function App() {
             "fill-extrusion-opacity": 0.78,
           },
         });
+        m.on("mousemove", "rain-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + p.r1 * RAIN_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.r1}mm`)]); });
+        m.on("mouseleave", "rain-col", () => setDeckLayers("hover", []));
       }
       m.setLayoutProperty("rain-col", "visibility", "visible");
       // 數字標號用 deck.gl 放在 [經度,緯度,地形高+柱高] 的 3D 位置，貼在水柱真實頂端
@@ -407,7 +423,8 @@ export default function App() {
 
   // ===== 海溫(SST)圖層 =====
   function sstColor(t: number) {
-    const stops: [number, number[]][] = [[18, [33, 102, 172]], [22, [103, 169, 207]], [25, [209, 229, 240]], [28, [253, 174, 97]], [31, [178, 24, 43]]];
+    // 色相分明的 spectral 色階，把海溫差異拉開
+    const stops: [number, number[]][] = [[20, [49, 54, 149]], [23, [69, 117, 180]], [25, [116, 173, 209]], [26.5, [171, 217, 233]], [28, [254, 224, 144]], [29, [253, 141, 60]], [30, [240, 59, 32]], [31.5, [165, 0, 38]]];
     if (t <= stops[0][0]) return stops[0][1];
     if (t >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
     for (let i = 0; i < stops.length - 1; i++) { const [a, ca] = stops[i], [b, cb] = stops[i + 1]; if (t >= a && t <= b) { const f = (t - a) / (b - a); return [0, 1, 2].map((k) => Math.round(ca[k] + (cb[k] - ca[k]) * f)); } }
@@ -481,14 +498,14 @@ export default function App() {
       m.addSource("sta-rain-src", { type: "geojson", data: rfc });
       m.addSource("sta-quake-src", { type: "geojson", data: ptsFC(qs) });
       const addCircle = (id: string, src: string, color: string) => {
-        m.addLayer({ id, type: "circle", source: src, paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 4.5], "circle-color": color, "circle-opacity": 0.9, "circle-stroke-width": 0.6, "circle-stroke-color": "rgba(0,0,0,0.5)" } });
+        m.addLayer({ id, type: "circle", source: src, paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 5], "circle-color": color, "circle-opacity": 0.95, "circle-stroke-width": 1.2, "circle-stroke-color": "#ffffff" } });
         m.on("click", id, (e) => { const f = e.features?.[0]; if (f) openStaPopup(f); });
         m.on("mouseenter", id, () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", id, () => { m.getCanvas().style.cursor = ""; });
       };
-      addCircle("sta-weather", "sta-weather-src", "#ff8a3d");
-      addCircle("sta-rain", "sta-rain-src", "#3da5ff");
-      addCircle("sta-quake", "sta-quake-src", "#b07cff");
+      addCircle("sta-weather", "sta-weather-src", "#E69F00"); // 橙
+      addCircle("sta-rain", "sta-rain-src", "#0072B2");       // 藍
+      addCircle("sta-quake", "sta-quake-src", "#009E73");     // 綠(Okabe-Ito 色盲友善)
     }
     applyStaVis(true, staTypes); setStaOn(true);
   }
@@ -501,7 +518,7 @@ export default function App() {
       const ring: number[][] = [];
       for (let i = 0; i < 6; i++) { const a = (Math.PI / 180) * (60 * i - 30); ring.push([s.lon + kx * Math.cos(a), s.lat + ky * Math.sin(a)]); }
       ring.push(ring[0]);
-      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { temp: s.temp, name: s.name } });
+      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { temp: s.temp, name: s.name, cx: s.lon, cy: s.lat } });
     }
     return { type: "FeatureCollection", features: feats } as any;
   }
@@ -529,6 +546,8 @@ export default function App() {
             "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.82,
           },
         });
+        m.on("mousemove", "temp-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + p.temp * TEMP_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.temp}°`)]); });
+        m.on("mouseleave", "temp-col", () => setDeckLayers("hover", []));
       }
       m.setLayoutProperty("temp-col", "visibility", "visible");
       const hot = [...stations].sort((a, b) => b.temp - a.temp).slice(0, 4);
@@ -730,7 +749,7 @@ export default function App() {
       </button>
       {staOn && (
         <div className="sta-panel">
-          {([["weather", "氣象站", "#ff8a3d"], ["rain", "雨量站", "#3da5ff"], ["quake", "地震站", "#b07cff"]] as const).map(([k, label, c]) => (
+          {([["weather", "氣象站", "#E69F00"], ["rain", "雨量站", "#0072B2"], ["quake", "地震站", "#009E73"]] as const).map(([k, label, c]) => (
             <label key={k} className="sta-opt">
               <input type="checkbox" checked={staTypes.has(k)} onChange={() => toggleStaType(k)} />
               <span className="sta-dot" style={{ background: c }} />{label}
