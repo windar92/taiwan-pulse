@@ -1,7 +1,7 @@
 // 即時環境資料唯讀代理(整併)：?ds=rain|temp|typhoon|quake (中央氣象署, 需 CWA_KEY)
 //                                 |ocean (台大 ODB 海溫, 免金鑰)
 //                                 |peaks (OSM Overpass 山岳, 多用於產生靜態檔)
-export const config = { maxDuration: 30 };
+export const config = { maxDuration: 60 };
 
 const UA = { "User-Agent": "TaiwanPulse/0.1 (+map)" };
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
@@ -116,7 +116,7 @@ async function ocean() {
 
 // ---- 山岳 OSM Overpass(主要供產生 public/peaks.json) ----
 const OVERPASS = "https://overpass-api.de/api/interpreter";
-const PEAKS_Q = `[out:json][timeout:90];
+const PEAKS_Q = `[out:json][timeout:50];
 (node[natural=peak][name][ele](21.8,120.0,25.4,122.1);
  node[natural=peak][name]["ele:local"](21.8,120.0,25.4,122.1););
 out;`;
