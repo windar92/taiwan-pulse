@@ -384,7 +384,7 @@ export default function App() {
     const ids = ["ships-cluster", "ships-count", "ships-pt"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); shipPopRef.current?.remove(); setShipsOn(false); setShipsInfo(""); return; }
     try {
-      const d = await fetch("/api/ships").then((r) => r.json());
+      const d = await fetch("/api/ships?t=" + Math.floor(Date.now() / 30000)).then((r) => r.json());
       if (!d.ok) { setShipsInfo("船舶未啟用：請設定 AISSTREAM_KEY"); return; }
       const fc = { type: "FeatureCollection", features: (d.ships || []).filter((s: any) => typeof s.lng === "number").map((s: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lng, s.lat] }, properties: { name: s.name || s.mmsi, cls: s.cls || "其他", mmsi: s.mmsi, sog: s.sog, type: s.shiptype } })) } as any;
       if (m.getSource("ships-src")) (m.getSource("ships-src") as mapboxgl.GeoJSONSource).setData(fc);
