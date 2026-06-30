@@ -1,0 +1,15 @@
+{
+  "rewrites": [
+    { "source": "/api/weather", "destination": "/api/live?ds=rain" },
+    { "source": "/api/airtemp", "destination": "/api/live?ds=temp" },
+    { "source": "/api/typhoon", "destination": "/api/live?ds=typhoon" },
+    { "source": "/api/quake", "destination": "/api/live?ds=quake" },
+    { "source": "/api/ocean", "destination": "/api/live?ds=ocean" },
+    { "source": "/api/peaks", "destination": "/peaks.json" },
+    { "source": "/api/events", "destination": "/api/board?res=events" },
+    { "source": "/api/reports", "destination": "/api/board?res=reports" },
+    { "source": "/api/feedback", "destination": "/api/board?res=feedback" },
+    { "source": "/api/ingest", "destination": "/api/board?res=ingest" },
+    { "source": "/api/ships-collect", "destination": "/api/ships?action=collect" }
+  ]
+}
