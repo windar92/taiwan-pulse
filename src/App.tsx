@@ -710,7 +710,7 @@ export default function App() {
         m.on("mouseleave", "quake-epi", () => { m.getCanvas().style.cursor = ""; });
       }
       for (const id of ["quake-shake-layer", "quake-sta", "quake-epi", "quake-ripple"]) m.setLayoutProperty(id, "visibility", "visible");
-      setQuakeList(quakes); setQuakeSel(0);
+      setQuakeList(quakes.slice(0, 15)); setQuakeSel(0);
       renderQuake(quakes[0]); startRipple();
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
