@@ -31,7 +31,7 @@ export default async function handler(req, res) {
     const all = [];
     for (const id of ["E-A0015-001", "E-A0016-001"]) {
       try {
-        const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/${id}?Authorization=${key}&format=JSON&limit=20`;
+        const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/${id}?Authorization=${key}&format=JSON&limit=50`;
         const r = await fetch(url, { headers: { "User-Agent": "TaiwanPulse/0.1 (+map)" } });
         if (!r.ok) continue;
         const j = await r.json();
@@ -44,7 +44,7 @@ export default async function handler(req, res) {
       if (typeof q.lat !== "number" || typeof q.lon !== "number") continue;
       const k = String(q.time); if (seen.has(k)) continue; seen.add(k); uniq.push(q);
     }
-    return send(200, { ok: true, count: uniq.length, quakes: uniq.slice(0, 15) });
+    return send(200, { ok: true, count: uniq.length, quakes: uniq.slice(0, 40) });
   } catch (e) {
     return send(500, { ok: false, error: e.message, quakes: [] });
   }
