@@ -24,14 +24,19 @@ export default async function handler(req, res) {
 
   const ships = new Map();
   const isCN = (m) => { const p = String(m || "").slice(0, 3); return p === "412" || p === "413" || p === "414"; };
+  const url = new URL(req.url, "http://x");
+  const winMs = Math.min(Math.max(Number(url.searchParams.get("ms")) || 38000, 3000), 55000);
+  const debug = url.searchParams.get("debug") === "1";
+  const diag = { total: 0, cn: 0, errors: [], opened: false };
 
   await new Promise((resolve) => {
     let ws, done = false;
     const finish = () => { if (done) return; done = true; try { ws && ws.close(); } catch {} resolve(); };
-    const timer = setTimeout(finish, 38000);
+    const timer = setTimeout(finish, winMs);
     try {
       ws = new WebSocket("wss://stream.aisstream.io/v0/stream");
       ws.on("open", () => {
+        diag.opened = true;
         ws.send(JSON.stringify({
           APIKey: key,
           BoundingBoxes: [[[5, 108], [30, 128]], [[30, 117], [46, 145]]], // 南海+台/菲/東海 ; 黃渤海+日本海
@@ -40,7 +45,10 @@ export default async function handler(req, res) {
       });
       ws.on("message", (buf) => {
         let m; try { m = JSON.parse(buf.toString()); } catch { return; }
+        diag.total++;
+        if (m.error || m.Error) { if (diag.errors.length < 3) diag.errors.push(m.error || m.Error); return; }
         const mmsi = m?.MetaData?.MMSI; if (!isCN(mmsi)) return;
+        diag.cn++;
         const id = String(mmsi);
         const cur = ships.get(id) || { mmsi: id };
         if (m.MessageType === "PositionReport") {
@@ -64,6 +72,6 @@ export default async function handler(req, res) {
 
   const list = [...ships.values()].filter((s) => typeof s.lat === "number" && typeof s.lng === "number");
   let inserted = 0;
-  try { inserted = await upsertShips(list); await pruneShips(24).catch(() => {}); } catch (e) { return send(500, { ok: false, error: e.message, collected: list.length }); }
-  return send(200, { ok: true, collected: list.length, upserted: inserted });
+  try { inserted = await upsertShips(list); await pruneShips(24).catch(() => {}); } catch (e) { return send(500, { ok: false, error: e.message, collected: list.length, diag }); }
+  return send(200, { ok: true, collected: list.length, upserted: inserted, ...(debug ? { diag } : {}) });
 }
