@@ -8,7 +8,8 @@ const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
 const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
-const TEMP_H = 520; // 氣溫柱示意高度倍率(每 °C)
+const TEMP_H = 520; // (保留)
+const TEMP_COL_H = 2600; // 氣溫柱固定高度(所有柱等高，溫度只用顏色表示)
 function qDate(t: string) { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function qLoc(s: string) { if (!s) return ""; const m = String(s).match(/位於(.+?)\)/); return m ? m[1] : String(s).slice(0, 10); }
 // 震度色階(1→7級)，色相分明
@@ -541,18 +542,18 @@ export default function App() {
         m.addLayer({
           id: "temp-col", type: "fill-extrusion", source: "temp-src",
           paint: {
-            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "temp"], 5, "#2166ac", 12, "#67a9cf", 20, "#f2f2f2", 28, "#ef8a62", 36, "#b2182b"],
-            "fill-extrusion-height": ["*", ["get", "temp"], TEMP_H],
-            "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.82,
+            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "temp"], 6, "#08306b", 11, "#2c7fb8", 16, "#7fcdbb", 20, "#ffffcc", 24, "#fd8d3c", 28, "#e31a1c", 33, "#800026"],
+            "fill-extrusion-height": TEMP_COL_H,
+            "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.9,
           },
         });
-        m.on("mousemove", "temp-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + p.temp * TEMP_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.temp}°`)]); });
+        m.on("mousemove", "temp-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + TEMP_COL_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.temp}°`)]); });
         m.on("mouseleave", "temp-col", () => setDeckLayers("hover", []));
       }
       m.setLayoutProperty("temp-col", "visibility", "visible");
       const hot = [...stations].sort((a, b) => b.temp - a.temp).slice(0, 4);
       const cold = [...stations].sort((a, b) => a.temp - b.temp).slice(0, 4);
-      const picks = [...hot, ...cold].map((s: any) => ({ ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + s.temp * TEMP_H }));
+      const picks = [...hot, ...cold].map((s: any) => ({ ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + TEMP_COL_H }));
       setDeckLayers("temp", [new TextLayer({
         id: "temp-text", data: picks,
         getPosition: (s: any) => [s.lon, s.lat, s.z],
