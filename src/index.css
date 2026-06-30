@@ -346,12 +346,28 @@ body,
   backdrop-filter: blur(6px);
 }
 .quake-legend .qlg-title { font-size: 11px; color: #cdd6e0; margin-right: 4px; }
-.quake-legend .qlg-sw {
-  width: 18px; height: 18px;
+.quake-legend .qlg-sw,
+.sst-legend .qlg-sw {
+  width: 20px; height: 18px;
   display: flex; align-items: center; justify-content: center;
-  font-size: 11px; color: #1a1a1a; font-weight: 700;
+  font-size: 10px; color: #1a1a1a; font-weight: 700;
   border-radius: 3px;
 }
+.sst-legend {
+  position: absolute;
+  right: 10px;
+  bottom: 66px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(11, 14, 19, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 5px 8px;
+  backdrop-filter: blur(6px);
+}
+.sst-legend .qlg-title { font-size: 11px; color: #cdd6e0; margin-right: 4px; }
 
 .rain-info {
   position: absolute;

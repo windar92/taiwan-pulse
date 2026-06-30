@@ -74,6 +74,7 @@ export default function App() {
   const [oceanOn, setOceanOn] = useState(false);
   const [oceanInfo, setOceanInfo] = useState<string>("");
   const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const hoverIdRef = useRef<{ rain: any; temp: any }>({ rain: null, temp: null });
   const [quakeList, setQuakeList] = useState<any[]>([]);
   const [quakeSel, setQuakeSel] = useState(0);
   const rippleRef = useRef<number | null>(null);
@@ -330,18 +331,24 @@ export default function App() {
       const fc = rainHexFC(stations);
       if (m.getSource("rain")) (m.getSource("rain") as mapboxgl.GeoJSONSource).setData(fc);
       else {
-        m.addSource("rain", { type: "geojson", data: fc });
+        m.addSource("rain", { type: "geojson", data: fc, generateId: true });
         m.addLayer({
           id: "rain-col", type: "fill-extrusion", source: "rain",
           paint: {
-            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "r1"], 0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"],
+            "fill-extrusion-color": ["case", ["boolean", ["feature-state", "hover"], false], "#ffffff", ["interpolate", ["linear"], ["get", "r1"], 0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"]],
             "fill-extrusion-height": ["*", ["get", "r1"], RAIN_H],
             "fill-extrusion-base": 0,
-            "fill-extrusion-opacity": 0.78,
+            "fill-extrusion-opacity": 0.8,
           },
         });
-        m.on("mousemove", "rain-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + p.r1 * RAIN_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.r1}mm`)]); });
-        m.on("mouseleave", "rain-col", () => setDeckLayers("hover", []));
+        m.on("mousemove", "rain-col", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + p.r1 * RAIN_H;
+          setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.r1}mm`)]);
+          if (hoverIdRef.current.rain != null && hoverIdRef.current.rain !== f.id) m.setFeatureState({ source: "rain", id: hoverIdRef.current.rain }, { hover: false });
+          hoverIdRef.current.rain = f.id; m.setFeatureState({ source: "rain", id: f.id }, { hover: true });
+        });
+        m.on("mouseleave", "rain-col", () => { setDeckLayers("hover", []); if (hoverIdRef.current.rain != null) { m.setFeatureState({ source: "rain", id: hoverIdRef.current.rain }, { hover: false }); hoverIdRef.current.rain = null; } });
       }
       m.setLayoutProperty("rain-col", "visibility", "visible");
       // 數字標號用 deck.gl 放在 [經度,緯度,地形高+柱高] 的 3D 位置，貼在水柱真實頂端
@@ -448,7 +455,7 @@ export default function App() {
   async function toggleOcean() {
     const m = mapRef.current; if (!m) return;
     const on = !oceanOn;
-    if (!on) { if (m.getLayer("ocean-sst")) m.setLayoutProperty("ocean-sst", "visibility", "none"); setOceanOn(false); setOceanInfo(""); return; }
+    if (!on) { for (const id of ["ocean-sst", "ocean-sst-label"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setOceanOn(false); setOceanInfo(""); return; }
     try {
       const d = await fetch("/api/ocean").then((r) => r.json());
       if (!d.ok || !(d.points || []).length) { setOceanInfo("海溫資料暫無"); return; }
@@ -456,6 +463,11 @@ export default function App() {
       if (m.getSource("ocean-src")) (m.getSource("ocean-src") as any).updateImage({ url: sh.url });
       else { m.addSource("ocean-src", { type: "image", url: sh.url, coordinates: sh.coords }); m.addLayer({ id: "ocean-sst", type: "raster", source: "ocean-src", paint: { "raster-opacity": 0.7, "raster-resampling": "linear", "raster-fade-duration": 0 } }, m.getLayer("intel-pts") ? "intel-pts" : undefined); }
       m.setLayoutProperty("ocean-sst", "visibility", "visible");
+      // 在海面對應位置標出溫度數值(text-allow-overlap:false 會依縮放自動疏密)
+      const labFC = { type: "FeatureCollection", features: d.points.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { t: Math.round(p.sst) } })) } as any;
+      if (m.getSource("ocean-lab-src")) (m.getSource("ocean-lab-src") as mapboxgl.GeoJSONSource).setData(labFC);
+      else { m.addSource("ocean-lab-src", { type: "geojson", data: labFC }); m.addLayer({ id: "ocean-sst-label", type: "symbol", source: "ocean-lab-src", layout: { "text-field": ["concat", ["to-string", ["get", "t"]], "°"], "text-size": ["interpolate", ["linear"], ["zoom"], 5, 9, 9, 13], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 1.4 } }); }
+      m.setLayoutProperty("ocean-sst-label", "visibility", "visible");
       setOceanOn(true); setOceanInfo(`海表溫度 ${d.date || ""}`);
     } catch { setOceanInfo("海溫讀取失敗"); }
   }
@@ -538,17 +550,23 @@ export default function App() {
       const fc = tempHexFC(stations);
       if (m.getSource("temp-src")) (m.getSource("temp-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
-        m.addSource("temp-src", { type: "geojson", data: fc });
+        m.addSource("temp-src", { type: "geojson", data: fc, generateId: true });
         m.addLayer({
           id: "temp-col", type: "fill-extrusion", source: "temp-src",
           paint: {
-            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "temp"], 6, "#08306b", 11, "#2c7fb8", 16, "#7fcdbb", 20, "#ffffcc", 24, "#fd8d3c", 28, "#e31a1c", 33, "#800026"],
+            "fill-extrusion-color": ["case", ["boolean", ["feature-state", "hover"], false], "#ffffff", ["interpolate", ["linear"], ["get", "temp"], 6, "#08306b", 11, "#2c7fb8", 16, "#7fcdbb", 20, "#ffffcc", 24, "#fd8d3c", 28, "#e31a1c", 33, "#800026"]],
             "fill-extrusion-height": TEMP_COL_H,
             "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.9,
           },
         });
-        m.on("mousemove", "temp-col", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + TEMP_COL_H; setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.temp}°`)]); });
-        m.on("mouseleave", "temp-col", () => setDeckLayers("hover", []));
+        m.on("mousemove", "temp-col", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + TEMP_COL_H;
+          setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.temp}°`)]);
+          if (hoverIdRef.current.temp != null && hoverIdRef.current.temp !== f.id) m.setFeatureState({ source: "temp-src", id: hoverIdRef.current.temp }, { hover: false });
+          hoverIdRef.current.temp = f.id; m.setFeatureState({ source: "temp-src", id: f.id }, { hover: true });
+        });
+        m.on("mouseleave", "temp-col", () => { setDeckLayers("hover", []); if (hoverIdRef.current.temp != null) { m.setFeatureState({ source: "temp-src", id: hoverIdRef.current.temp }, { hover: false }); hoverIdRef.current.temp = null; } });
       }
       m.setLayoutProperty("temp-col", "visibility", "visible");
       const hot = [...stations].sort((a, b) => b.temp - a.temp).slice(0, 4);
@@ -767,6 +785,12 @@ export default function App() {
         海溫
       </button>
       {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
+      {oceanOn && (
+        <div className="sst-legend">
+          <span className="qlg-title">海溫°C</span>
+          {[22, 24, 26, 28, 30, 32].map((t) => (<span key={t} className="qlg-sw" style={{ background: `rgb(${sstColor(t).join(",")})` }}>{t}</span>))}
+        </div>
+      )}
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">
