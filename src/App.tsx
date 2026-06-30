@@ -8,6 +8,7 @@ const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
 const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
+const TEMP_H = 520; // 氣溫柱示意高度倍率(每 °C)
 function qDate(t: string) { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
 function qLoc(s: string) { if (!s) return ""; const m = String(s).match(/位於(.+?)\)/); return m ? m[1] : String(s).slice(0, 10); }
 // 震度色階(1→7級)，色相分明
@@ -62,6 +63,8 @@ export default function App() {
   const [rainInfo, setRainInfo] = useState<string>("");
   const [quakeOn, setQuakeOn] = useState(false);
   const [quakeInfo, setQuakeInfo] = useState<string>("");
+  const [tempOn, setTempOn] = useState(false);
+  const [tempInfo, setTempInfo] = useState<string>("");
   const [quakeList, setQuakeList] = useState<any[]>([]);
   const [quakeSel, setQuakeSel] = useState(0);
   const rippleRef = useRef<number | null>(null);
@@ -337,6 +340,62 @@ export default function App() {
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
   }
+  // 氣溫站 → 六角柱(高度依氣溫，色彩以 20°C 為中點:藍冷紅熱)
+  function tempHexFC(stations: any[]) {
+    const feats: any[] = []; const R = 0.0315;
+    for (const s of stations) {
+      if (s.temp == null) continue;
+      const kx = R / Math.max(0.2, Math.cos((s.lat * Math.PI) / 180)), ky = R;
+      const ring: number[][] = [];
+      for (let i = 0; i < 6; i++) { const a = (Math.PI / 180) * (60 * i - 30); ring.push([s.lon + kx * Math.cos(a), s.lat + ky * Math.sin(a)]); }
+      ring.push(ring[0]);
+      feats.push({ type: "Feature", geometry: { type: "Polygon", coordinates: [ring] }, properties: { temp: s.temp, name: s.name } });
+    }
+    return { type: "FeatureCollection", features: feats } as any;
+  }
+  async function toggleTemp() {
+    const m = mapRef.current; if (!m) return;
+    const on = !tempOn;
+    if (!on) {
+      if (m.getLayer("temp-col")) m.setLayoutProperty("temp-col", "visibility", "none");
+      setDeckLayers("temp", []); setTempOn(false); setTempInfo("");
+      return;
+    }
+    try {
+      const d = await fetch("/api/airtemp").then((r) => r.json());
+      if (!d.ok) { setTempInfo(d.error === "CWA_KEY 未設定" ? "氣溫未啟用：請設定 CWA_KEY" : "氣溫讀取失敗"); return; }
+      const stations = (d.stations || []).filter((s: any) => s.temp != null);
+      const fc = tempHexFC(stations);
+      if (m.getSource("temp-src")) (m.getSource("temp-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("temp-src", { type: "geojson", data: fc });
+        m.addLayer({
+          id: "temp-col", type: "fill-extrusion", source: "temp-src",
+          paint: {
+            "fill-extrusion-color": ["interpolate", ["linear"], ["get", "temp"], 5, "#2166ac", 12, "#67a9cf", 20, "#f2f2f2", 28, "#ef8a62", 36, "#b2182b"],
+            "fill-extrusion-height": ["*", ["get", "temp"], TEMP_H],
+            "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.82,
+          },
+        });
+      }
+      m.setLayoutProperty("temp-col", "visibility", "visible");
+      const hot = [...stations].sort((a, b) => b.temp - a.temp).slice(0, 4);
+      const cold = [...stations].sort((a, b) => a.temp - b.temp).slice(0, 4);
+      const picks = [...hot, ...cold].map((s: any) => ({ ...s, z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + s.temp * TEMP_H }));
+      setDeckLayers("temp", [new TextLayer({
+        id: "temp-text", data: picks,
+        getPosition: (s: any) => [s.lon, s.lat, s.z],
+        getText: (s: any) => `${s.name} ${s.temp}°`,
+        getSize: 12, sizeUnits: "pixels", getColor: [255, 255, 255, 255], billboard: true,
+        fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif', characterSet: "auto",
+        getTextAnchor: "middle", getAlignmentBaseline: "bottom",
+        background: true, getBackgroundColor: [10, 18, 30, 210], backgroundPadding: [5, 3],
+      })]);
+      const ts = stations.map((s: any) => s.temp);
+      setTempOn(true);
+      setTempInfo(`氣溫觀測 ${d.time ? String(d.time).slice(11, 16) : ""}　${Math.min(...ts).toFixed(0)}–${Math.max(...ts).toFixed(0)}°C`);
+    } catch { setTempInfo("氣溫讀取失敗"); }
+  }
   // 以各站震度做 IDW 空間內插，建出規則網格(資料空白區設 0，讓等高線收在有感範圍內)
   function idwGrid(stations: any[]) {
     const x0 = 119.2, x1 = 122.4, y0 = 21.7, y1 = 25.5, dx = 0.02, dy = 0.02;
@@ -510,6 +569,10 @@ export default function App() {
         地震
       </button>
       {quakeInfo && <div className="quake-info">{quakeInfo}</div>}
+      <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱(藍冷紅熱，20°C 為中點)">
+        氣溫
+      </button>
+      {tempInfo && <div className="temp-info">{tempInfo}</div>}
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">

@@ -169,6 +169,38 @@ body,
 }
 .quake-btn.on { background: #c0392b; color: #fff; }
 .quake-btn:hover { filter: brightness(1.05); }
+
+.temp-btn {
+  position: absolute;
+  top: 286px;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.temp-btn.on { background: linear-gradient(90deg, #2166ac, #b2182b); color: #fff; }
+.temp-btn:hover { filter: brightness(1.05); }
+.temp-info {
+  position: absolute;
+  top: 289px;
+  right: 56px;
+  z-index: 3;
+  background: rgba(11, 14, 19, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e7ecf3;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
 .quake-info {
   position: absolute;
   top: 251px;
