@@ -68,6 +68,11 @@ export default function App() {
   const [staOn, setStaOn] = useState(false);
   const [staTypes, setStaTypes] = useState<Set<string>>(new Set(["weather", "rain", "quake"]));
   const staPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [typhoonOn, setTyphoonOn] = useState(false);
+  const [typhoonInfo, setTyphoonInfo] = useState<string>("");
+  const [oceanOn, setOceanOn] = useState(false);
+  const [oceanInfo, setOceanInfo] = useState<string>("");
+  const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [quakeList, setQuakeList] = useState<any[]>([]);
   const [quakeSel, setQuakeSel] = useState(0);
   const rippleRef = useRef<number | null>(null);
@@ -343,6 +348,100 @@ export default function App() {
       setRainInfo(d.time ? `雨量觀測 ${String(d.time).slice(11, 16)}` : "");
     } catch { setRainInfo("雨量讀取失敗"); }
   }
+  // ===== 颱風圖層 =====
+  function quadPoly(lon: number, lat: number, q: any) {
+    if (!q) return null;
+    const kLat = 1 / 111, kLon = 1 / (111 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+    const pts: number[][] = [];
+    for (let a = 0; a <= 360; a += 8) {
+      let r = a < 90 ? q.NE : a < 180 ? q.SE : a < 270 ? q.SW : q.NW; r = r || q.r || 0;
+      const rad = (a * Math.PI) / 180;
+      pts.push([lon + Math.sin(rad) * r * kLon, lat + Math.cos(rad) * r * kLat]);
+    }
+    pts.push(pts[0]); return pts;
+  }
+  function circlePoly(lon: number, lat: number, rkm: number) {
+    const kLat = 1 / 111, kLon = 1 / (111 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+    const pts: number[][] = [];
+    for (let a = 0; a <= 360; a += 12) { const rad = (a * Math.PI) / 180; pts.push([lon + Math.sin(rad) * rkm * kLon, lat + Math.cos(rad) * rkm * kLat]); }
+    pts.push(pts[0]); return pts;
+  }
+  function setSrc(id: string, data: any) { const m = mapRef.current!; const s = m.getSource(id) as mapboxgl.GeoJSONSource; if (s) s.setData(data); else m.addSource(id, { type: "geojson", data }); }
+  async function toggleTyphoon() {
+    const m = mapRef.current; if (!m) return;
+    const on = !typhoonOn;
+    const ids = ["ty-cone", "ty-wind", "ty-path", "ty-fcst", "ty-center"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setTyphoonOn(false); setTyphoonInfo(""); return; }
+    try {
+      const d = await fetch("/api/typhoon").then((r) => r.json());
+      if (!d.ok) { setTyphoonInfo("颱風讀取失敗"); return; }
+      const tys = d.typhoons || [];
+      if (!tys.length) { setTyphoonInfo("目前西北太平洋無活動颱風"); return; }
+      const lineF: any[] = [], coneF: any[] = [], windF: any[] = [], centerF: any[] = [];
+      for (const t of tys) {
+        if (t.analysis.length >= 2) lineF.push({ type: "Feature", properties: { type: "a" }, geometry: { type: "LineString", coordinates: t.analysis.map((p: any) => [p.lon, p.lat]) } });
+        if (t.forecast.length) { const last = t.analysis[t.analysis.length - 1] || t.forecast[0]; lineF.push({ type: "Feature", properties: { type: "f" }, geometry: { type: "LineString", coordinates: [[last.lon, last.lat], ...t.forecast.map((p: any) => [p.lon, p.lat])] } }); }
+        for (const p of t.forecast) if (p.r70) coneF.push({ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [circlePoly(p.lon, p.lat, p.r70)] } });
+        const cur = t.analysis[t.analysis.length - 1];
+        if (cur) {
+          const w7 = quadPoly(cur.lon, cur.lat, cur.r15); if (w7) windF.push({ type: "Feature", properties: { lvl: 7 }, geometry: { type: "Polygon", coordinates: [w7] } });
+          const w10 = quadPoly(cur.lon, cur.lat, cur.r25); if (w10) windF.push({ type: "Feature", properties: { lvl: 10 }, geometry: { type: "Polygon", coordinates: [w10] } });
+          centerF.push({ type: "Feature", properties: { name: t.name, wind: cur.wind, pressure: cur.pressure }, geometry: { type: "Point", coordinates: [cur.lon, cur.lat] } });
+        }
+      }
+      setSrc("ty-cone-src", { type: "FeatureCollection", features: coneF });
+      setSrc("ty-wind-src", { type: "FeatureCollection", features: windF });
+      setSrc("ty-line-src", { type: "FeatureCollection", features: lineF });
+      setSrc("ty-center-src", { type: "FeatureCollection", features: centerF });
+      if (!m.getLayer("ty-cone")) {
+        m.addLayer({ id: "ty-cone", type: "fill", source: "ty-cone-src", paint: { "fill-color": "#9ecae1", "fill-opacity": 0.12 } });
+        m.addLayer({ id: "ty-wind", type: "fill", source: "ty-wind-src", paint: { "fill-color": ["match", ["get", "lvl"], 10, "#e23b3b", "#f5a53c"], "fill-opacity": ["match", ["get", "lvl"], 10, 0.4, 0.22] } });
+        m.addLayer({ id: "ty-path", type: "line", source: "ty-line-src", filter: ["==", ["get", "type"], "a"], paint: { "line-color": "#ffffff", "line-width": 2.4, "line-opacity": 0.9 } });
+        m.addLayer({ id: "ty-fcst", type: "line", source: "ty-line-src", filter: ["==", ["get", "type"], "f"], paint: { "line-color": "#ffd54f", "line-width": 2.2, "line-dasharray": [2, 2], "line-opacity": 0.9 } });
+        m.addLayer({ id: "ty-center", type: "symbol", source: "ty-center-src", layout: { "text-field": "🌀", "text-size": 30, "text-allow-overlap": true } });
+      }
+      for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+      setTyphoonOn(true); setTyphoonInfo(`颱風:${tys.map((t: any) => t.name).filter(Boolean).join("、")}`);
+    } catch { setTyphoonInfo("颱風讀取失敗"); }
+  }
+
+  // ===== 海溫(SST)圖層 =====
+  function sstColor(t: number) {
+    const stops: [number, number[]][] = [[18, [33, 102, 172]], [22, [103, 169, 207]], [25, [209, 229, 240]], [28, [253, 174, 97]], [31, [178, 24, 43]]];
+    if (t <= stops[0][0]) return stops[0][1];
+    if (t >= stops[stops.length - 1][0]) return stops[stops.length - 1][1];
+    for (let i = 0; i < stops.length - 1; i++) { const [a, ca] = stops[i], [b, cb] = stops[i + 1]; if (t >= a && t <= b) { const f = (t - a) / (b - a); return [0, 1, 2].map((k) => Math.round(ca[k] + (cb[k] - ca[k]) * f)); } }
+    return stops[stops.length - 1][1];
+  }
+  function sstImage(points: any[]) {
+    const x0 = 117, x1 = 124, y0 = 20, y1 = 27, step = 0.25;
+    const nx = Math.round((x1 - x0) / step) + 1, ny = Math.round((y1 - y0) / step) + 1;
+    const grid = new Float32Array(nx * ny).fill(NaN);
+    for (const p of points) { const i = Math.round((p.lon - x0) / step), j = Math.round((p.lat - y0) / step); if (i >= 0 && i < nx && j >= 0 && j < ny) grid[j * nx + i] = p.sst; }
+    const small = document.createElement("canvas"); small.width = nx; small.height = ny;
+    const sctx = small.getContext("2d")!; const img = sctx.createImageData(nx, ny);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const v = grid[j * nx + i], row = ny - 1 - j, o = (row * nx + i) * 4; if (Number.isNaN(v)) { img.data[o + 3] = 0; continue; } const c = sstColor(v); img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 185; }
+    sctx.putImageData(img, 0, 0);
+    let cv = oceanCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); oceanCanvasRef.current = cv; }
+    const scale = 8; cv.width = nx * scale; cv.height = ny * scale; const ctx = cv.getContext("2d")!;
+    ctx.clearRect(0, 0, cv.width, cv.height); ctx.imageSmoothingEnabled = true; ctx.filter = "blur(6px)"; ctx.drawImage(small, 0, 0, cv.width, cv.height); ctx.filter = "none";
+    return { url: cv.toDataURL(), coords: [[x0, y1], [x1, y1], [x1, y0], [x0, y0]] as any };
+  }
+  async function toggleOcean() {
+    const m = mapRef.current; if (!m) return;
+    const on = !oceanOn;
+    if (!on) { if (m.getLayer("ocean-sst")) m.setLayoutProperty("ocean-sst", "visibility", "none"); setOceanOn(false); setOceanInfo(""); return; }
+    try {
+      const d = await fetch("/api/ocean").then((r) => r.json());
+      if (!d.ok || !(d.points || []).length) { setOceanInfo("海溫資料暫無"); return; }
+      const sh = sstImage(d.points);
+      if (m.getSource("ocean-src")) (m.getSource("ocean-src") as any).updateImage({ url: sh.url });
+      else { m.addSource("ocean-src", { type: "image", url: sh.url, coordinates: sh.coords }); m.addLayer({ id: "ocean-sst", type: "raster", source: "ocean-src", paint: { "raster-opacity": 0.7, "raster-resampling": "linear", "raster-fade-duration": 0 } }, m.getLayer("intel-pts") ? "intel-pts" : undefined); }
+      m.setLayoutProperty("ocean-sst", "visibility", "visible");
+      setOceanOn(true); setOceanInfo(`海表溫度 ${d.date || ""}`);
+    } catch { setOceanInfo("海溫讀取失敗"); }
+  }
+
   // ===== 整合測站圖層(氣象/雨量/地震，可自選) =====
   function ptsFC(arr: any[]) {
     return { type: "FeatureCollection", features: arr.map((a) => ({ type: "Feature", geometry: { type: "Point", coordinates: [a.lon, a.lat] }, properties: a.p })) } as any;
@@ -639,6 +738,15 @@ export default function App() {
           ))}
         </div>
       )}
+
+      <button className={"ty-btn" + (typhoonOn ? " on" : "")} onClick={toggleTyphoon} title="颱風路徑、暴風圈與預報警戒圈">
+        颱風
+      </button>
+      {typhoonInfo && <div className="ty-info">{typhoonInfo}</div>}
+      <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">
+        海溫
+      </button>
+      {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">

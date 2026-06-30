@@ -229,6 +229,41 @@ body,
   cursor: pointer;
 }
 .sta-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+.ty-btn, .ocean-btn {
+  position: absolute;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.ty-btn { top: 362px; }
+.ocean-btn { top: 400px; }
+.ty-btn.on { background: #6a1b9a; color: #fff; }
+.ocean-btn.on { background: #00838f; color: #fff; }
+.ty-btn:hover, .ocean-btn:hover { filter: brightness(1.05); }
+.ty-info, .ocean-info {
+  position: absolute;
+  right: 56px;
+  z-index: 3;
+  background: rgba(11, 14, 19, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #e7ecf3;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
+.ty-info { top: 365px; }
+.ocean-info { top: 403px; }
 .temp-info {
   position: absolute;
   top: 289px;
