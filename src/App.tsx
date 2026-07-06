@@ -481,14 +481,15 @@ export default function App() {
   async function toggleTyphoon() {
     const m = mapRef.current; if (!m) return;
     const on = !typhoonOn;
-    const ids = ["ty-cone", "ty-wind", "ty-path", "ty-fcst", "ty-center"];
+    const ids = ["ty-cone", "ty-wind", "ty-path", "ty-fcst", "ty-pt", "ty-ptlbl", "ty-center"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setTyphoonOn(false); setTyphoonInfo(""); return; }
     try {
       const d = await fetch("/api/typhoon").then((r) => r.json());
       if (!d.ok) { setTyphoonInfo("颱風讀取失敗"); return; }
       const tys = d.typhoons || [];
       if (!tys.length) { setTyphoonInfo("目前西北太平洋無活動颱風"); return; }
-      const lineF: any[] = [], coneF: any[] = [], windF: any[] = [], centerF: any[] = [];
+      const lineF: any[] = [], coneF: any[] = [], windF: any[] = [], centerF: any[] = [], ptF: any[] = [];
+      const fmtT = (iso: string) => { const d = new Date(iso); if (isNaN(d.getTime())) return ""; try { return new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(d); } catch { return ""; } };
       for (const t of tys) {
         if (t.analysis.length >= 2) lineF.push({ type: "Feature", properties: { type: "a" }, geometry: { type: "LineString", coordinates: t.analysis.map((p: any) => [p.lon, p.lat]) } });
         if (t.forecast.length) { const last = t.analysis[t.analysis.length - 1] || t.forecast[0]; lineF.push({ type: "Feature", properties: { type: "f" }, geometry: { type: "LineString", coordinates: [[last.lon, last.lat], ...t.forecast.map((p: any) => [p.lon, p.lat])] } }); }
@@ -498,17 +499,27 @@ export default function App() {
           const w7 = quadPoly(cur.lon, cur.lat, cur.r15); if (w7) windF.push({ type: "Feature", properties: { lvl: 7 }, geometry: { type: "Polygon", coordinates: [w7] } });
           const w10 = quadPoly(cur.lon, cur.lat, cur.r25); if (w10) windF.push({ type: "Feature", properties: { lvl: 10 }, geometry: { type: "Polygon", coordinates: [w10] } });
           centerF.push({ type: "Feature", properties: { name: t.name, wind: cur.wind, pressure: cur.pressure }, geometry: { type: "Point", coordinates: [cur.lon, cur.lat] } });
+          ptF.push({ type: "Feature", properties: { label: `現在 ${fmtT(cur.time)}`, kind: "now" }, geometry: { type: "Point", coordinates: [cur.lon, cur.lat] } });
+        }
+        for (const p of t.forecast) {
+          const base = p.time ? new Date(p.time).getTime() : NaN;
+          const vt = Number.isFinite(base) && p.hour != null ? new Date(base + p.hour * 3600000).toISOString() : (p.time || "");
+          const lbl = (p.hour != null ? `+${p.hour}h ` : "") + fmtT(vt);
+          ptF.push({ type: "Feature", properties: { label: lbl.trim(), kind: "f" }, geometry: { type: "Point", coordinates: [p.lon, p.lat] } });
         }
       }
       setSrc("ty-cone-src", { type: "FeatureCollection", features: coneF });
       setSrc("ty-wind-src", { type: "FeatureCollection", features: windF });
       setSrc("ty-line-src", { type: "FeatureCollection", features: lineF });
       setSrc("ty-center-src", { type: "FeatureCollection", features: centerF });
+      setSrc("ty-pt-src", { type: "FeatureCollection", features: ptF });
       if (!m.getLayer("ty-cone")) {
         m.addLayer({ id: "ty-cone", type: "fill", source: "ty-cone-src", paint: { "fill-color": "#9ecae1", "fill-opacity": 0.12 } });
         m.addLayer({ id: "ty-wind", type: "fill", source: "ty-wind-src", paint: { "fill-color": ["match", ["get", "lvl"], 10, "#e23b3b", "#f5a53c"], "fill-opacity": ["match", ["get", "lvl"], 10, 0.4, 0.22] } });
         m.addLayer({ id: "ty-path", type: "line", source: "ty-line-src", filter: ["==", ["get", "type"], "a"], paint: { "line-color": "#ffffff", "line-width": 2.4, "line-opacity": 0.9 } });
         m.addLayer({ id: "ty-fcst", type: "line", source: "ty-line-src", filter: ["==", ["get", "type"], "f"], paint: { "line-color": "#ffd54f", "line-width": 2.2, "line-dasharray": [2, 2], "line-opacity": 0.9 } });
+        m.addLayer({ id: "ty-pt", type: "circle", source: "ty-pt-src", paint: { "circle-radius": ["match", ["get", "kind"], "now", 5, 3.5], "circle-color": ["match", ["get", "kind"], "now", "#ffffff", "#ffd54f"], "circle-stroke-width": 1, "circle-stroke-color": "#333" } });
+        m.addLayer({ id: "ty-ptlbl", type: "symbol", source: "ty-pt-src", layout: { "text-field": ["get", "label"], "text-size": 11, "text-offset": [0, 1.1], "text-anchor": "top", "text-allow-overlap": false, "text-optional": true }, paint: { "text-color": "#fff3c4", "text-halo-color": "#3a2f00", "text-halo-width": 1.4 } });
         m.addLayer({ id: "ty-center", type: "symbol", source: "ty-center-src", layout: { "text-field": "🌀", "text-size": 30, "text-allow-overlap": true } });
       }
       for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
