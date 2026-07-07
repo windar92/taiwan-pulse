@@ -81,6 +81,9 @@ export default function App() {
   const [peaksOn, setPeaksOn] = useState(false);
   const [peaksInfo, setPeaksInfo] = useState<string>("");
   const peakPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [wallOn, setWallOn] = useState(false);
+  const [wallInfo, setWallInfo] = useState<string>("");
+  const wallPopRef = useRef<mapboxgl.Popup | null>(null);
   const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const hoverIdRef = useRef<{ rain: any; temp: any }>({ rain: null, temp: null });
   const [quakeList, setQuakeList] = useState<any[]>([]);
@@ -458,6 +461,57 @@ export default function App() {
       setPeaksInfo(`山岳 ${d.peaks.length} 座(其中 ≥3000m ${n3} 座)`);
       setPeaksOn(true);
     } catch { setPeaksInfo("山岳資料載入失敗"); }
+  }
+  // ===== 河川水位立體水牆 =====
+  async function toggleWaterWall() {
+    const m = mapRef.current; if (!m) return;
+    const on = !wallOn;
+    const ids = ["ww-base", "ww-top", "ww-pt"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); wallPopRef.current?.remove(); setWallOn(false); setWallInfo(""); return; }
+    try {
+      const d = await fetch("/api/live?ds=river&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
+      if (!d.ok || !(d.stations || []).length) { setWallInfo("河川水位資料暫時無法取得"); return; }
+      const EXAG = 1500, W = 0.0016, CAP = 60000;
+      const refOf = (s: any) => (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level);
+      const st = d.stations.filter((s: any) => typeof s.lng === "number" && typeof s.lat === "number" && typeof s.cur_level === "number");
+      const byRiver: Record<string, any[]> = {};
+      for (const s of st) { const k = s.river || "_"; (byRiver[k] ||= []).push(s); }
+      const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
+      const ribbon = (a: number[], b: number[]) => { const dx = b[0] - a[0], dy = b[1] - a[1]; const len = Math.hypot(dx, dy) || 1e-9; const nx = -dy / len * W, ny = dx / len * W; return [[[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny], [a[0] + nx, a[1] + ny]]]; };
+      for (const k in byRiver) {
+        const arr = byRiver[k];
+        let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
+        for (const s of arr) { minx = Math.min(minx, s.lng); maxx = Math.max(maxx, s.lng); miny = Math.min(miny, s.lat); maxy = Math.max(maxy, s.lat); }
+        const byLon = (maxx - minx) >= (maxy - miny);
+        arr.sort((p, q) => byLon ? p.lng - q.lng : p.lat - q.lat);
+        for (let i = 0; i < arr.length; i++) {
+          const s = arr[i], nxt = arr[i + 1];
+          ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+          const A = [s.lng, s.lat], B = nxt ? [nxt.lng, nxt.lat] : [s.lng + 1e-4, s.lat + 1e-4];
+          if (nxt && Math.hypot(nxt.lng - s.lng, nxt.lat - s.lat) > 0.35) continue; // 兩站太遠不硬連
+          const ref = refOf(s), refN = nxt ? refOf(nxt) : ref, cur = s.cur_level, curN = nxt ? nxt.cur_level : cur;
+          const bT = Math.min((Math.min(cur, ref) + Math.min(curN, refN)) / 2 * EXAG, CAP);
+          const mB = Math.min((ref + refN) / 2 * EXAG, CAP), mT = Math.min((cur + curN) / 2 * EXAG, CAP);
+          const poly = ribbon(A, B);
+          baseF.push({ type: "Feature", properties: { h: bT }, geometry: { type: "Polygon", coordinates: poly } });
+          if (mT > mB + 1) topF.push({ type: "Feature", properties: { base: mB, h: mT }, geometry: { type: "Polygon", coordinates: poly } });
+        }
+      }
+      setSrc("ww-base-src", { type: "FeatureCollection", features: baseF });
+      setSrc("ww-top-src", { type: "FeatureCollection", features: topF });
+      setSrc("ww-pt-src", { type: "FeatureCollection", features: ptF });
+      if (!m.getLayer("ww-base")) {
+        m.addLayer({ id: "ww-base", type: "fill-extrusion", source: "ww-base-src", paint: { "fill-extrusion-color": "#0b3d91", "fill-extrusion-base": 0, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.82 } });
+        m.addLayer({ id: "ww-top", type: "fill-extrusion", source: "ww-top-src", paint: { "fill-extrusion-color": "#7a4a21", "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.9 } });
+        m.addLayer({ id: "ww-pt", type: "circle", source: "ww-pt-src", paint: { "circle-radius": 3, "circle-color": "#9fd8ff", "circle-stroke-width": 0.6, "circle-stroke-color": "#08304e" } });
+        m.on("mouseenter", "ww-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "ww-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) : "累積中"; const html = `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>目前水位 ${Number(p.cur).toFixed(2)} m<br/>平均 ${avg} m<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m</div>`; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m); });
+      }
+      for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
+      setWallInfo(`水牆 ${ptF.length} 站（藍=平均以下、泥=超出平均）`);
+      setWallOn(true);
+    } catch { setWallInfo("河川水位載入失敗"); }
   }
   // ===== 颱風圖層 =====
   function quadPoly(lon: number, lat: number, q: any) {
@@ -894,6 +948,10 @@ export default function App() {
         山岳
       </button>
       {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
+      <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均，點站看數值">
+        水牆
+      </button>
+      {wallInfo && <div className="wall-info">{wallInfo}</div>}
       {oceanOn && (
         <div className="sst-legend">
           <span className="qlg-title">海溫°C</span>

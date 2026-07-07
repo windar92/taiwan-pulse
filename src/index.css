@@ -331,6 +331,37 @@ body,
 }
 .peak-btn.on { background: #b7791f; color: #fff; }
 .peak-btn:hover { filter: brightness(1.05); }
+.wall-btn {
+  position: absolute;
+  top: 562px;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.wall-btn.on { background: #0b3d91; color: #fff; }
+.wall-btn:hover { filter: brightness(1.05); }
+.wall-info {
+  position: absolute;
+  top: 565px;
+  right: 56px;
+  z-index: 3;
+  background: rgba(6, 16, 30, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: #cfe6ff;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 11.5px;
+  white-space: nowrap;
+  backdrop-filter: blur(6px);
+}
 .peak-info {
   position: absolute;
   top: 522px;
