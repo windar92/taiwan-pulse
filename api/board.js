@@ -3,7 +3,7 @@
 //   reports GET 附近群眾回報 / POST 新增回報
 //   feedback GET 統計(或 ?list=1) / POST 新增錯誤回報
 //   ingest  POST 由 GitHub Actions 觸發抓取(以 INGEST_SECRET 保護)
-import { listEvents, listReports, addReport, addFeedback, feedbackStats, listFeedback, upsertRiverMeta, upsertRiverLevel } from "../lib/db.js";
+import { listEvents, listReports, addReport, addFeedback, feedbackStats, listFeedback, upsertRiverMeta, upsertRiverLevel, clearRiver } from "../lib/db.js";
 import { runIngest } from "../lib/ingest.js";
 
 export const config = { maxDuration: 60 };
@@ -41,11 +41,12 @@ async function riverCollect() {
   const UA = { "User-Agent": "TaiwanPulse/0.1 (+map)" };
   const [sRes, lRes] = await Promise.all([fetch(RIVER_STATION_URL, { headers: UA }), fetch(RIVER_LEVEL_URL, { headers: UA })]);
   const sJson = await sRes.json(), lJson = await lRes.json();
+  // 站況以 basinidentifier(短站碼) 為主鍵，正好對上即時資料的 stationid
   const stations = asArray(sJson).map(lcKeys).map((r) => {
     const [lng, lat] = parseTwd97(r.locationbytwd97_xy);
-    return { id: r.observatoryidentifier, name: r.observatoryname, river: r.rivername, lng, lat, warn1: rnum(r.alertlevel1), warn2: rnum(r.alertlevel2), warn3: rnum(r.alertlevel3), zero_elev: rnum(r.elevationofwaterlevelzeropoint) };
+    return { id: r.basinidentifier, name: r.observatoryname, river: r.rivername, lng, lat, warn1: rnum(r.alertlevel1), warn2: rnum(r.alertlevel2), warn3: rnum(r.alertlevel3), zero_elev: rnum(r.elevationofwaterlevelzeropoint) };
   }).filter((s) => s.id);
-  const levels = asArray(lJson).map(lcKeys).map((r) => ({ id: r.observatoryidentifier || r.stationid, level: rnum(r.waterlevel), time: r.datetime || r.recordtime || r.time || null })).filter((r) => r.id && typeof r.level === "number");
+  const levels = asArray(lJson).map(lcKeys).map((r) => ({ id: r.stationid, level: rnum(r.waterlevel), time: r.datetime || r.recordtime || r.time || null })).filter((r) => r.id && typeof r.level === "number");
   const metaUpserted = await upsertRiverMeta(stations);
   const levelUpserted = await upsertRiverLevel(levels);
   return { ok: true, stations: stations.length, withCoord: stations.filter((s) => s.lng != null).length, metaUpserted, levels: levels.length, levelUpserted, sampleStation: stations.find((s) => s.lng != null) || null, sampleLevel: levels[0] || null };
@@ -102,6 +103,7 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, stats: await feedbackStats() });
     }
     if (resType === "river-collect") {
+      if (url.searchParams.get("reset") === "1") await clearRiver();
       return send(res, 200, await riverCollect());
     }
     if (resType === "ingest") {
