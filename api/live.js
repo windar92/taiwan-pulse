@@ -3,6 +3,8 @@
 //                                 |peaks (OSM Overpass 山岳, 多用於產生靜態檔)
 export const config = { maxDuration: 60 };
 
+import { listRiverStations, riverRaw } from "../lib/db.js";
+
 const UA = { "User-Agent": "TaiwanPulse/0.1 (+map)" };
 const num = (v) => { const n = parseFloat(v); return Number.isFinite(n) ? n : null; };
 
@@ -155,6 +157,11 @@ export default async function handler(req, res) {
       case "quake": if (!key) return send(res, 200, { ok: false, error: "CWA_KEY 未設定", quakes: [] }, "no-store"); return send(res, 200, await quake(key), "s-maxage=120, stale-while-revalidate=300");
       case "ocean": return send(res, 200, await ocean(), "s-maxage=21600, stale-while-revalidate=43200");
       case "peaks": return send(res, 200, await peaks(Number(url.searchParams.get("min")) || 1000), "s-maxage=86400, stale-while-revalidate=604800");
+      case "river": {
+        if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
+        const stations = await listRiverStations();
+        return send(res, 200, { ok: true, count: stations.length, stations }, "s-maxage=120, stale-while-revalidate=300");
+      }
       default: return send(res, 400, { ok: false, error: "未知 ds，需 rain|temp|typhoon|quake|ocean|peaks" }, "no-store");
     }
   } catch (e) {
