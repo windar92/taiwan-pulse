@@ -108,19 +108,23 @@ async function importReporter(src) {
   for (let i = 0; i < feats.length; i++) {
     const p = feats[i].properties || {}; const c = firstCoord(feats[i].geometry);
     if (!c || !(c[0] > 116 && c[0] < 128 && c[1] > 17 && c[1] < 28)) continue;
-    let ev_date = null, type = "air", detail = "", source = "", uniq = "", zone = "西南空域";
+    let ev_date = null, type = "air", detail = "", source = "", uniq = "", zone = "西南空域", cnt = 1;
     if (src === "jp") {
       const m = (p.file_name || "").match(/p(\d{4})(\d{2})(\d{2})/); if (!m) continue;
       ev_date = `${m[1]}-${m[2]}-${m[3]}`; type = p.data === "ship" ? "sea" : "air"; zone = "東部海空域";
       detail = String(p.id_content || p.unique_labels || "解放軍艦艇").replace(/[[\]']/g, "");
       source = "日本防衛省 統合幕僚監部(報導者彙整)"; uniq = `jp|${p.file_name}|${p.order}`;
-    } else {
-      const y = p.year, mo = p.month, d = p.day; if (!y || !mo || !d) continue;
-      ev_date = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; type = "air";
+    } else if (p.year && p.month && p.day) {
+      ev_date = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`; type = "air";
       detail = String(p["機型中文"] || p.Aircraft_Type || "共機");
       source = "國防部(報導者彙整)"; uniq = `tw|${p.id != null ? p.id : i}`;
-    }
-    items.push({ ev_date, type, zone, lng: c[0], lat: c[1], cnt: 1, detail, source, url: "https://github.com/data-reporter/PLA_Path_Database", uniq });
+    } else if (p.date && /^\d{4}-\d{2}-\d{2}/.test(String(p.date))) {
+      ev_date = String(p.date).slice(0, 10); type = "air";
+      detail = String(p.description || p.flight_keywords || "共機活動");
+      const mm = String(p.description || "").match(/(\d+)\s*架次/); if (mm) cnt = Number(mm[1]);
+      source = "國防部(報導者彙整)"; uniq = `tw|${p.properties_id || p.id || (src + "|" + i)}`;
+    } else continue;
+    items.push({ ev_date, type, zone, lng: c[0], lat: c[1], cnt, detail, source, url: "https://github.com/data-reporter/PLA_Path_Database", uniq });
   }
   const upserted = await upsertIncursions(items);
   return { ok: true, src, feats: feats.length, parsed: items.length, upserted, sample: items.slice(0, 2) };
