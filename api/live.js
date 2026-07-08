@@ -151,7 +151,7 @@ async function peaks(minEle) {
     for (const el of j.elements || []) {
       const name = el.tags?.name; if (!name) continue;
       const ele = Math.round(parseFloat(String(el.tags?.ele ?? el.tags?.["ele:local"]).replace(/[^\d.\-]/g, "")));
-      if (!Number.isFinite(ele) || ele <= 0) continue;
+      if (!Number.isFinite(ele) || ele <= 0 || ele > 4200) continue; // 台灣最高玉山 3952m，超過視為髒資料
       if (typeof el.lat !== "number" || typeof el.lon !== "number") continue;
       const k = name + "@" + el.lat.toFixed(3); if (seen.has(k)) continue; seen.add(k);
       out.push({ name, name_en: el.tags?.["name:en"] || null, lng: el.lon, lat: el.lat, ele, tier: peakTier(ele) });
