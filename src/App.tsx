@@ -82,6 +82,9 @@ export default function App() {
   const [peaksOn, setPeaksOn] = useState(false);
   const [peaksInfo, setPeaksInfo] = useState<string>("");
   const peakPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [lakeOn, setLakeOn] = useState(false);
+  const [lakeInfo, setLakeInfo] = useState<string>("");
+  const lakePopRef = useRef<mapboxgl.Popup | null>(null);
   const [wallOn, setWallOn] = useState(false);
   const [wallInfo, setWallInfo] = useState<string>("");
   const wallPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -395,11 +398,12 @@ export default function App() {
   async function toggleShips() {
     const m = mapRef.current; if (!m) return;
     const on = !shipsOn;
-    const ids = ["ships-cluster", "ships-count", "ships-pt"];
+    const ids = ["ship-trk-line", "ship-trk-warn", "ships-cluster", "ships-count", "ships-pt"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); shipPopRef.current?.remove(); setShipsOn(false); setShipsInfo(""); return; }
     try {
       const d = await fetch("/api/ships?t=" + Math.floor(Date.now() / 30000)).then((r) => r.json());
       if (!d.ok) { setShipsInfo("船舶未啟用：請設定 AISSTREAM_KEY"); return; }
+      loadShipTracks(m);
       const fc = { type: "FeatureCollection", features: (d.ships || []).filter((s: any) => typeof s.lng === "number").map((s: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [s.lng, s.lat] }, properties: { name: s.name || s.mmsi, cls: s.cls || "其他", mmsi: s.mmsi, sog: s.sog, type: s.shiptype } })) } as any;
       if (m.getSource("ships-src")) (m.getSource("ships-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
@@ -412,9 +416,44 @@ export default function App() {
         m.on("mouseenter", "ships-pt", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "ships-pt", () => { m.getCanvas().style.cursor = ""; });
       }
-      for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+      for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
       setShipsOn(true); setShipsInfo(d.count ? `中國籍船舶 ${d.count} 艘(近3小時)` : "尚無資料(收集器每10分鐘更新)");
     } catch { setShipsInfo("船舶讀取失敗"); }
+  }
+  // 近 7 天航跡 + 異常標記(非同步載入，資料由收集器逐批累積)
+  async function loadShipTracks(m: mapboxgl.Map) {
+    try {
+      const d = await fetch("/api/ships?action=tracks&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
+      if (!d.ok || !(d.tracks || []).length) return; // 尚未累積出軌跡
+      const feats = d.tracks.filter((v: any) => (v.points || []).length >= 2).map((v: any) => ({
+        type: "Feature",
+        geometry: { type: "LineString", coordinates: v.points.map((p: any) => [p[0], p[1]]) },
+        properties: { mmsi: v.mmsi, name: v.name || v.mmsi, cls: v.cls || "其他", flag: v.flag, reason: v.reason, pathKm: v.pathKm, dispKm: v.dispKm, hours: v.hours },
+      }));
+      const fc = { type: "FeatureCollection", features: feats } as any;
+      if (m.getSource("ship-trk-src")) (m.getSource("ship-trk-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        const beforeId = m.getLayer("ships-cluster") ? "ships-cluster" : undefined;
+        m.addSource("ship-trk-src", { type: "geojson", data: fc });
+        const colorByFlag = ["match", ["get", "flag"], "detour", "#ff5252", "loiter", "#ffca28", "rgba(120,200,210,0.55)"];
+        m.addLayer({ id: "ship-trk-line", type: "line", source: "ship-trk-src", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": colorByFlag as any, "line-width": ["match", ["get", "flag"], "normal", 1.2, 2.2], "line-opacity": ["match", ["get", "flag"], "normal", 0.5, 0.95] } }, beforeId);
+        m.addLayer({ id: "ship-trk-warn", type: "line", source: "ship-trk-src", filter: ["!=", ["get", "flag"], "normal"], paint: { "line-color": ["match", ["get", "flag"], "detour", "#ff5252", "#ffca28"], "line-width": 6, "line-opacity": 0.18, "line-blur": 2 } }, beforeId);
+        const flagTxt = (f: string) => f === "detour" ? "⚠ 繞行/折返" : f === "loiter" ? "⚠ 逗留" : "正常航行";
+        m.on("click", "ship-trk-line", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          shipPopRef.current?.remove();
+          shipPopRef.current = new mapboxgl.Popup({ offset: 8, className: "hover-tip" }).setLngLat(e.lngLat).setHTML(
+            `<div class="qpop"><b>${p.name}</b>　${p.cls}<br/>MMSI ${p.mmsi}<br/>${flagTxt(p.flag)}<br/><span style="opacity:.8">${p.reason}</span><br/><span style="opacity:.6;font-size:11px">近 7 天航跡 ${p.pathKm}km／淨位移 ${p.dispKm}km／${p.hours}h</span></div>`
+          ).addTo(m);
+        });
+        m.on("mouseenter", "ship-trk-line", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "ship-trk-line", () => { m.getCanvas().style.cursor = ""; });
+      }
+      if (shipsOn || true) for (const id of ["ship-trk-warn", "ship-trk-line"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
+      const c = d.counts || {};
+      const extra = (c.loiter || c.detour) ? `，異常 ${(c.loiter || 0) + (c.detour || 0)} 艘(逗留 ${c.loiter || 0}／繞行 ${c.detour || 0})` : "";
+      setShipsInfo((s) => (s ? s.replace(/，異常.*$/, "") : s) + `　航跡 ${d.vessels} 艘${extra}`);
+    } catch {}
   }
   // ===== 河流圖層(用 Mapbox 底圖 waterway，常態畫線 + 河名 + hover 高亮整條) =====
   function toggleRivers() {
@@ -484,6 +523,57 @@ export default function App() {
       setPeaksInfo(`山岳 ${d.peaks.length} 座(其中 ≥3000m ${n3} 座)`);
       setPeaksOn(true);
     } catch { setPeaksInfo("山岳資料載入失敗"); }
+  }
+  // ===== 堰塞湖監測(林保署 國有林堰塞湖監測系統) =====
+  // 位置為各溪概略座標(端點未提供座標)，僅供定位參考，詳情連官方專區
+  function lakeCoord(name: string): [number, number] {
+    const RIV: Record<string, [number, number]> = {
+      萬里溪: [121.44, 23.77], 馬太鞍溪: [121.41, 23.65], 泰崗溪: [121.31, 24.53],
+      木瓜溪: [121.45, 23.98], 樂樂溪: [121.15, 23.40], 豐坪溪: [121.22, 23.47],
+      五十溪: [121.55, 24.60], 大南溪: [121.00, 22.78], 大曼溪: [121.33, 24.65],
+      清水溪: [120.72, 23.66], 加走寮溪: [120.72, 23.66],
+    };
+    for (const k in RIV) if (name.includes(k)) return RIV[k];
+    const CTY: Record<string, [number, number]> = { 花蓮: [121.40, 23.80], 南投: [120.90, 23.90], 新竹: [121.15, 24.60], 宜蘭: [121.60, 24.55], 台東: [121.00, 22.90], 台中: [120.95, 24.20], 高雄: [120.75, 23.10], 屏東: [120.70, 22.70] };
+    for (const k in CTY) if (name.includes(k)) return CTY[k];
+    return [121.0, 23.7];
+  }
+  async function toggleLake() {
+    const m = mapRef.current; if (!m) return;
+    const on = !lakeOn;
+    const ids = ["lake-ring", "lake-pt", "lake-label"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); lakePopRef.current?.remove(); setLakeOn(false); setLakeInfo(""); return; }
+    try {
+      const d = await fetch("/api/live?ds=barrierlake&t=" + Date.now()).then((r) => r.json());
+      if (!d.ok || !(d.lakes || []).length) { setLakeInfo("堰塞湖資料暫時無法取得"); return; }
+      const OFFICIAL = "https://qlakenew.forest.gov.tw/FarmlandQlakenew/LandslideDam";
+      const fc = { type: "FeatureCollection", features: d.lakes.map((l: any) => {
+        const [lng, lat] = lakeCoord(l.name || "");
+        return { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { name: l.name, alert: l.alert || "gray", warn: l.warn ? 1 : 0, rainalert: l.rainalert || "無", upd: l.upd || "" } };
+      }) } as any;
+      const colorByAlert = ["match", ["get", "alert"], "red", "#e53935", "orange", "#fb8c00", "yellow", "#ffca28", "#78909c"];
+      if (m.getSource("lake-src")) (m.getSource("lake-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("lake-src", { type: "geojson", data: fc, generateId: true });
+        m.addLayer({ id: "lake-ring", type: "circle", source: "lake-src", filter: ["==", ["get", "warn"], 1], paint: { "circle-radius": 16, "circle-color": "rgba(229,57,53,0.18)", "circle-stroke-color": "#e53935", "circle-stroke-width": 1.5 } });
+        m.addLayer({ id: "lake-pt", type: "circle", source: "lake-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 6, 11, 11], "circle-color": colorByAlert as any, "circle-stroke-width": 1.6, "circle-stroke-color": "#fff", "circle-opacity": 0.95 } });
+        m.addLayer({ id: "lake-label", type: "symbol", source: "lake-src", layout: { "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 10, 11, 13], "text-offset": [0, 1.1], "text-anchor": "top", "text-allow-overlap": false }, paint: { "text-color": "#e3f2fd", "text-halo-color": "#0d1b2a", "text-halo-width": 1.4 } });
+        const alertTxt = (a: string) => a === "red" ? "紅色警戒" : a === "orange" ? "橙色警戒" : a === "yellow" ? "黃色警戒" : "監測中(無警戒)";
+        m.on("click", "lake-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          lakePopRef.current?.remove();
+          lakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.name}</b><br/>狀態：${alertTxt(p.alert)}<br/>雨量警戒：${p.rainalert}<br/><span style="opacity:.7">更新 ${String(p.upd).replace("T", " ").slice(0, 16)}</span><br/><span style="opacity:.6;font-size:11px">位置為概略，詳情見<a href="${OFFICIAL}" target="_blank" rel="noopener" style="color:#8ecbff">官方監測系統</a></span></div>`
+          ).addTo(m);
+        });
+        m.on("mouseenter", "lake-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "lake-pt", () => { m.getCanvas().style.cursor = ""; });
+      }
+      for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
+      const nWarn = d.lakes.filter((l: any) => l.warn).length;
+      setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}`);
+      setLakeOn(true);
+    } catch { setLakeInfo("堰塞湖資料載入失敗"); }
   }
   // ===== 河川水位立體水牆(鋪在 OSM 河道幾何上) =====
   function wallRefOf(s: any) { return (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level); }
@@ -996,6 +1086,10 @@ export default function App() {
       <button className={"sat-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="衛星空照:NASA GIBS MODIS 每日近即時真彩影像疊圖">
         空照
       </button>
+      <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):目前監測中的堰塞湖與警戒等級，位置概略、詳情連官方">
+        堰塞湖
+      </button>
+      {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
       <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均，點站看數值">
         水牆
       </button>
