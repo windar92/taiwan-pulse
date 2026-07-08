@@ -331,6 +331,23 @@ body,
 }
 .peak-btn.on { background: #b7791f; color: #fff; }
 .peak-btn:hover { filter: brightness(1.05); }
+.sat-btn {
+  position: absolute;
+  top: 605px;
+  right: 10px;
+  z-index: 3;
+  border: none;
+  border-radius: 5px;
+  background: #fff;
+  color: #222;
+  font-size: 12px;
+  padding: 0 10px;
+  height: 29px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.sat-btn.on { background: #2e7d32; color: #fff; }
+.sat-btn:hover { filter: brightness(1.05); }
 .wall-btn {
   position: absolute;
   top: 562px;

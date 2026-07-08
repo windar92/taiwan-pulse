@@ -52,6 +52,7 @@ export default function App() {
   const [showMemo, setShowMemo] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat">("dark");
+  const [satOn, setSatOn] = useState(false);
   const [sel, setSel] = useState<Sel | null>(null);
   const [expanded, setExpanded] = useState(false);
   const [reporting, setReporting] = useState(false);
@@ -436,6 +437,21 @@ export default function App() {
     }
     for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
     setRiversOn(true);
+  }
+  // ===== 衛星空照(NASA GIBS 每日近即時真彩) =====
+  function toggleSat() {
+    const m = mapRef.current; if (!m) return;
+    const on = !satOn;
+    if (!on) { if (m.getLayer("gibs-sat")) m.setLayoutProperty("gibs-sat", "visibility", "none"); setSatOn(false); return; }
+    if (!m.getLayer("gibs-sat")) {
+      const d = new Date(Date.now() - 24 * 3600 * 1000); // 取昨日(當日常未處理完)
+      const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+      m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.85 } }, beforeId);
+    }
+    m.setLayoutProperty("gibs-sat", "visibility", "visible");
+    setSatOn(true);
   }
   // ===== 山岳圖層(百岳/高山，OSM 名稱+標高) =====
   async function togglePeaks() {
@@ -977,6 +993,9 @@ export default function App() {
         山岳
       </button>
       {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
+      <button className={"sat-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="衛星空照:NASA GIBS MODIS 每日近即時真彩影像疊圖">
+        空照
+      </button>
       <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均，點站看數值">
         水牆
       </button>
