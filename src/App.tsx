@@ -87,6 +87,11 @@ export default function App() {
   const lakePopRef = useRef<mapboxgl.Popup | null>(null);
   const [gzOn, setGzOn] = useState(false);
   const gzPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [gzFrom, setGzFrom] = useState(0);
+  const [gzTo, setGzTo] = useState(0);
+  const [gzMax, setGzMax] = useState(0);
+  const [gzInfo, setGzInfo] = useState<string>("");
+  const gzDataRef = useRef<any[]>([]);
   const [wallOn, setWallOn] = useState(false);
   const [wallInfo, setWallInfo] = useState<string>("");
   const wallPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -551,6 +556,11 @@ export default function App() {
       desc: "馬太鞍溪堰塞湖(花蓮萬榮)：2025/7 颱風誘發崩塌形成，9/4 滿水位約 1110m、湖面最大約 59.7 公頃、壩前水深逾 200m；9 月溢流致光復重災，10/23 縮至約 12.6 公頃。深藍=目前殘留湖面，淺藍=最大淹沒範圍，紅線=崩塌壩體。範圍由 30m DEM 淹沒推估(反算水位與官方吻合)。",
     },
   };
+  // 尚無公開精確座標/岸線者：以真實屬性呈現(點位為概略)
+  const LAKE_DESC: Record<string, string> = {
+    萬里溪: "萬里溪堰塞湖(花蓮萬榮，2026/6 形成)：位萬里溪上游林田山事業區 96/82 林班交界，距七彩湖僅約 7km。壩體高約 114m、溢流口高程 1086m、目前水位約 1066.4m；崩塌面積約 45 公頃，最大蓄水量約 510 萬 m³(目前約 243 萬)，推估約 7/12 達滿水位。地形險峻難進入，以監測預警為主。(位置為概略，官方未公開精確座標)",
+    泰崗溪: "泰崗溪堰塞湖(新竹尖石，2024/10 康芮颱風形成)：位泰崗溪上游、距司馬庫斯大橋上游約 10km。面積僅約 1.3 公頃、蓄水約 4.8 萬 m³(約 20 座泳池)、壩高約 10m，現況穩定溢流、對下游聚落無潰壩威脅。(規模過小，僅標概略點位)",
+  };
   async function toggleLake() {
     const m = mapRef.current; if (!m) return;
     const on = !lakeOn;
@@ -562,7 +572,8 @@ export default function App() {
       const OFFICIAL = "https://qlakenew.forest.gov.tw/FarmlandQlakenew/LandslideDam";
       const fc = { type: "FeatureCollection", features: d.lakes.map((l: any) => {
         const [lng, lat] = lakeCoord(l.name || "");
-        return { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { name: l.name, alert: l.alert || "gray", warn: l.warn ? 1 : 0, rainalert: l.rainalert || "無", upd: l.upd || "" } };
+        const dk = Object.keys(LAKE_DESC).find((k) => (l.name || "").includes(k));
+        return { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { name: l.name, alert: l.alert || "gray", warn: l.warn ? 1 : 0, rainalert: l.rainalert || "無", upd: l.upd || "", desc: dk ? LAKE_DESC[dk] : "" } };
       }) } as any;
       const colorByAlert = ["match", ["get", "alert"], "red", "#e53935", "orange", "#fb8c00", "yellow", "#ffca28", "#78909c"];
       if (m.getSource("lake-src")) (m.getSource("lake-src") as mapboxgl.GeoJSONSource).setData(fc);
@@ -575,8 +586,9 @@ export default function App() {
         m.on("click", "lake-pt", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
           lakePopRef.current?.remove();
-          lakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(
-            `<div class="qpop"><b>${p.name}</b><br/>狀態：${alertTxt(p.alert)}<br/>雨量警戒：${p.rainalert}<br/><span style="opacity:.7">更新 ${String(p.upd).replace("T", " ").slice(0, 16)}</span><br/><span style="opacity:.6;font-size:11px">位置為概略，詳情見<a href="${OFFICIAL}" target="_blank" rel="noopener" style="color:#8ecbff">官方監測系統</a></span></div>`
+          const descHtml = p.desc ? `<br/><span style="opacity:.9">${p.desc}</span>` : "";
+          lakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip", maxWidth: "320px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.name}</b><br/>狀態：${alertTxt(p.alert)}<br/>雨量警戒：${p.rainalert}${descHtml}<br/><span style="opacity:.6;font-size:11px">詳情見<a href="${OFFICIAL}" target="_blank" rel="noopener" style="color:#8ecbff">官方監測系統</a></span></div>`
           ).addTo(m);
         });
         m.on("mouseenter", "lake-pt", () => { m.getCanvas().style.cursor = "pointer"; });
@@ -610,6 +622,52 @@ export default function App() {
       setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}`);
       setLakeOn(true);
     } catch { setLakeInfo("堰塞湖資料載入失敗"); }
+  }
+  // ===== 中國入侵/灰色地帶 時間軸密度圖層 =====
+  // 月索引：2020-09 = 0
+  function monthIdx(dateStr: string) { const d = new Date(dateStr); return (d.getUTCFullYear() - 2020) * 12 + d.getUTCMonth() - 8; }
+  function idxLabel(idx: number) { const y = 2020 + Math.floor((idx + 8) / 12); const mo = ((idx + 8) % 12) + 1; return `${y}/${String(mo).padStart(2, "0")}`; }
+  const GZ_COLOR = ["match", ["get", "type"], "air", "#ff6d00", "drill", "#d50000", "coastguard", "#ff9100", "cable", "#ffd600", "sea", "#2962ff", "survey", "#aa00ff", "#bbbbbb"];
+  const GZ_TYPE_TXT: Record<string, string> = { air: "共機空域侵擾", drill: "圍台軍演/軍事威懾", coastguard: "海警灰色地帶", cable: "海纜破壞", sea: "共艦動態", survey: "科研測繪" };
+  function renderIncursions(fromIdx: number, toIdx: number) {
+    const m = mapRef.current; if (!m) return;
+    const data = gzDataRef.current || [];
+    const feats = data.filter((e) => { const i = monthIdx(e.ev_date); return i >= fromIdx && i <= toIdx && typeof e.lng === "number"; })
+      .map((e) => ({ type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] }, properties: { type: e.type, cnt: e.cnt || 1, detail: e.detail, source: e.source, url: e.url || "", zone: e.zone, date: e.ev_date } }));
+    const fc = { type: "FeatureCollection", features: feats } as any;
+    if (m.getSource("gz-src")) (m.getSource("gz-src") as mapboxgl.GeoJSONSource).setData(fc);
+    const total = feats.reduce((s: number, f: any) => s + (f.properties.cnt || 1), 0);
+    setGzInfo(`${idxLabel(fromIdx)}–${idxLabel(toIdx)}：${feats.length} 起事件、累計 ${total} 架次/艘次/次`);
+  }
+  async function toggleGrayZone() {
+    const m = mapRef.current; if (!m) return;
+    const on = !gzOn;
+    const ids = ["gz-heat", "gz-pt", "gz-lbl"];
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); gzPopRef.current?.remove(); setGzOn(false); setGzInfo(""); return; }
+    try {
+      const d = await fetch("/api/intel?action=read&t=" + Date.now()).then((r) => r.json());
+      if (!d.ok || !(d.incursions || []).length) { setGzInfo("入侵資料暫時無法取得(可能需先 seed)"); return; }
+      gzDataRef.current = d.incursions;
+      const maxIdx = Math.max(...d.incursions.map((e: any) => monthIdx(e.ev_date)), monthIdx(new Date().toISOString()));
+      setGzMax(maxIdx); setGzFrom(0); setGzTo(maxIdx);
+      if (!m.getSource("gz-src")) {
+        m.addSource("gz-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } as any });
+        m.addLayer({ id: "gz-heat", type: "heatmap", source: "gz-src", paint: { "heatmap-weight": ["interpolate", ["linear"], ["get", "cnt"], 1, 0.4, 50, 1, 150, 2], "heatmap-intensity": 1.1, "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 4, 22, 8, 44], "heatmap-opacity": 0.55, "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.2, "#2962ff", 0.4, "#00e5ff", 0.6, "#ffd600", 0.8, "#ff6d00", 1, "#d50000"] } });
+        m.addLayer({ id: "gz-pt", type: "circle", source: "gz-src", paint: { "circle-radius": ["interpolate", ["linear"], ["get", "cnt"], 1, 5, 20, 11, 60, 16, 150, 22], "circle-color": GZ_COLOR as any, "circle-opacity": 0.82, "circle-stroke-width": 1, "circle-stroke-color": "rgba(255,255,255,0.8)" } });
+        m.addLayer({ id: "gz-lbl", type: "symbol", source: "gz-src", minzoom: 6, layout: { "text-field": ["case", [">", ["get", "cnt"], 1], ["to-string", ["get", "cnt"]], ""], "text-size": 11, "text-allow-overlap": false }, paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1 } });
+        m.on("click", "gz-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          gzPopRef.current?.remove();
+          const link = p.url ? `<br/><a href="${p.url}" target="_blank" rel="noopener" style="color:#8ecbff">來源連結 ↗</a>` : "";
+          gzPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "300px" }).setLngLat((f.geometry as any).coordinates).setHTML(`<div class="qpop"><b>${p.date}　${GZ_TYPE_TXT[p.type] || p.type}</b>（${p.zone}）<br/><span style="opacity:.9">${p.detail}</span><br/><span style="opacity:.6;font-size:11px">來源：${p.source}${link}</span></div>`).addTo(m);
+        });
+        m.on("mouseenter", "gz-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "gz-pt", () => { m.getCanvas().style.cursor = ""; });
+      }
+      for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
+      renderIncursions(0, maxIdx);
+      setGzOn(true);
+    } catch { setGzInfo("入侵資料載入失敗"); }
   }
   // ===== 河川水位立體水牆(鋪在 OSM 河道幾何上) =====
   function wallRefOf(s: any) { return (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level); }
@@ -1126,6 +1184,20 @@ export default function App() {
         堰塞湖
       </button>
       {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
+      <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度(共機/共艦/海警/海纜/科研/軍演)">
+        中國入侵
+      </button>
+      {gzInfo && <div className="gz-info">{gzInfo}</div>}
+      {gzOn && (
+        <div className="gz-ctrl">
+          <div className="gz-range-lbl">時間範圍　<b>{idxLabel(gzFrom)} → {idxLabel(gzTo)}</b></div>
+          <label>起 <input type="range" min={0} max={gzMax} step={1} value={gzFrom} onChange={(e) => { const v = Math.min(Number(e.target.value), gzTo); setGzFrom(v); renderIncursions(v, gzTo); }} /></label>
+          <label>訖 <input type="range" min={0} max={gzMax} step={1} value={gzTo} onChange={(e) => { const v = Math.max(Number(e.target.value), gzFrom); setGzTo(v); renderIncursions(gzFrom, v); }} /></label>
+          <div className="gz-legend">
+            <span style={{ color: "#ff6d00" }}>●</span>共機　<span style={{ color: "#d50000" }}>●</span>軍演　<span style={{ color: "#ff9100" }}>●</span>海警　<span style={{ color: "#ffd600" }}>●</span>海纜　<span style={{ color: "#2962ff" }}>●</span>共艦　<span style={{ color: "#aa00ff" }}>●</span>科研
+          </div>
+        </div>
+      )}
       <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均，點站看數值">
         水牆
       </button>
