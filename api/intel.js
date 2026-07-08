@@ -90,6 +90,42 @@ async function collectMND(pages = 1, max = 40) {
   return { ok: true, entries: uniq.length, parsed: items.length, upserted, sample: items.slice(0, 3) };
 }
 
+// —— 匯入《報導者》PLA_Path_Database：台灣國防部機跡 + 日本防衛省艦跡(各標來源) ——
+const REP_BASE = "https://raw.githubusercontent.com/data-reporter/PLA_Path_Database/main/";
+const REP_FILES = {
+  jp: "Japan/jp_data_cleaned.geojson",
+  tw1: "Taiwan/20220801-20230915_fixed.geojson",
+  tw2: "Taiwan/20230918-20240115.geojson",
+  tw3: "Taiwan/20240116-20240731_v2.geojson",
+};
+function firstCoord(g) { if (!g || !g.coordinates) return null; let c = g.coordinates; while (Array.isArray(c[0])) c = c[0]; return c; }
+async function importReporter(src) {
+  const path = REP_FILES[src]; if (!path) return { ok: false, error: "unknown src(jp|tw1|tw2|tw3)" };
+  const txt = await fetch(REP_BASE + path, { headers: { "User-Agent": "taiwan-pulse/1.0" } }).then((r) => r.text());
+  const j = JSON.parse(txt.replace(/:\s*NaN/g, ": null").replace(/:\s*-?Infinity/g, ": null"));
+  const feats = j.features || [];
+  const items = [];
+  for (let i = 0; i < feats.length; i++) {
+    const p = feats[i].properties || {}; const c = firstCoord(feats[i].geometry);
+    if (!c || !(c[0] > 116 && c[0] < 128 && c[1] > 17 && c[1] < 28)) continue;
+    let ev_date = null, type = "air", detail = "", source = "", uniq = "", zone = "西南空域";
+    if (src === "jp") {
+      const m = (p.file_name || "").match(/p(\d{4})(\d{2})(\d{2})/); if (!m) continue;
+      ev_date = `${m[1]}-${m[2]}-${m[3]}`; type = p.data === "ship" ? "sea" : "air"; zone = "東部海空域";
+      detail = String(p.id_content || p.unique_labels || "解放軍艦艇").replace(/[[\]']/g, "");
+      source = "日本防衛省 統合幕僚監部(報導者彙整)"; uniq = `jp|${p.file_name}|${p.order}`;
+    } else {
+      const y = p.year, mo = p.month, d = p.day; if (!y || !mo || !d) continue;
+      ev_date = `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`; type = "air";
+      detail = String(p["機型中文"] || p.Aircraft_Type || "共機");
+      source = "國防部(報導者彙整)"; uniq = `tw|${p.id != null ? p.id : i}`;
+    }
+    items.push({ ev_date, type, zone, lng: c[0], lat: c[1], cnt: 1, detail, source, url: "https://github.com/data-reporter/PLA_Path_Database", uniq });
+  }
+  const upserted = await upsertIncursions(items);
+  return { ok: true, src, feats: feats.length, parsed: items.length, upserted, sample: items.slice(0, 2) };
+}
+
 export default async function handler(req, res) {
   const url = new URL(req.url, "http://x");
   const action = url.searchParams.get("action") || "read";
@@ -99,6 +135,7 @@ export default async function handler(req, res) {
       return send(res, 200, { ok: true, seeded: n });
     }
     if (action === "collect") return send(res, 200, await collectMND(Math.min(Number(url.searchParams.get("pages")) || 1, 8), Math.min(Number(url.searchParams.get("max")) || 40, 90)));
+    if (action === "import") return send(res, 200, await importReporter(url.searchParams.get("src") || "jp"));
     if (action === "raw") return send(res, 200, { ok: true, raw: await incursionsRaw() });
     // read
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
