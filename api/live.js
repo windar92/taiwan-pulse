@@ -181,6 +181,17 @@ async function rivergeo() {
   return { ok: true, count: _rgCache.length, rivers: _rgCache };
 }
 
+// ---- 堰塞湖監測(林保署 國有林堰塞湖監測系統, 免金鑰) ----
+async function barrierlake() {
+  const r = await fetch("https://qlakenew.forest.gov.tw/FarmlandQlakenew/Collapse/ReadData?Type=GetLake", { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) taiwan-pulse", "Accept": "application/json, text/plain, */*", "Referer": "https://qlakenew.forest.gov.tw/FarmlandQlakenew/LandslideDam", "X-Requested-With": "XMLHttpRequest" } });
+  if (!r.ok) throw new Error("qlake " + r.status);
+  const arr = await r.json();
+  const lakes = (Array.isArray(arr) ? arr : []).filter((l) => String(l.active) === "1").map((l) => ({
+    id: l.row_id, name: l.device_name, alert: l.alertlevel || "gray", warn: String(l.warning_flag) === "1", rainalert: l.rainalertvalue, upd: l.update_time,
+  }));
+  return { ok: true, count: lakes.length, lakes };
+}
+
 export default async function handler(req, res) {
   const url = new URL(req.url, "http://x");
   const ds = url.searchParams.get("ds") || "";
@@ -194,6 +205,7 @@ export default async function handler(req, res) {
       case "ocean": return send(res, 200, await ocean(), "s-maxage=21600, stale-while-revalidate=43200");
       case "peaks": return send(res, 200, await peaks(Number(url.searchParams.get("min")) || 1000), "s-maxage=86400, stale-while-revalidate=604800");
       case "rivergeo": return send(res, 200, await rivergeo(), "s-maxage=86400, stale-while-revalidate=604800");
+      case "barrierlake": return send(res, 200, await barrierlake(), "s-maxage=300, stale-while-revalidate=900");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
