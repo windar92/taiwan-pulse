@@ -477,15 +477,28 @@ export default function App() {
     const W = 0.0016 * widthMult, CAP = 100000, R = 0.02, BASE = 500, STEP = 3;
     const ribbon = (a: number[], b: number[]) => { const dx = b[0] - a[0], dy = b[1] - a[1]; const len = Math.hypot(dx, dy) || 1e-9; const nx = -dy / len * W, ny = dx / len * W; return [[[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny], [a[0] + nx, a[1] + ny]]]; };
     // 由「附近站點」反距離加權在河線某點內插高度(空間鄰近，非河名)
-    const idw = (pt: number[]) => { let ws = 0, cur = 0, ref = 0, any = false; for (const s of st) { const dx = Math.abs(s.lng - pt[0]), dy = Math.abs(s.lat - pt[1]); if (dx > R || dy > R) continue; const d = Math.hypot(dx, dy); if (d > R) continue; any = true; const w = 1 / (d * d + 1e-7); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return any ? { cur: cur / ws, ref: ref / ws } : null; };
+    const R2 = 0.03; // 判定河段「有站在附近」的半徑
+    const nearSta = (pt: number[]) => { for (const s of st) { const dx = Math.abs(s.lng - pt[0]), dy = Math.abs(s.lat - pt[1]); if (dx < R2 && dy < R2 && Math.hypot(dx, dy) < R2) return true; } return false; };
+    // IDW 內插:不設硬截斷,長空檔中間的點主要由前後兩個最近站決定(沿河補牆)
+    const idwAll = (pt: number[]) => { let ws = 0, cur = 0, ref = 0; for (const s of st) { const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]); const w = 1 / (d * d + 1e-6); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return { cur: cur / ws, ref: ref / ws }; };
     const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
     for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     for (const river of geo) {
       const L = river.coords; if (!L || L.length < 2) continue;
+      // bbox 預剪:整條河外接框附近都沒站就跳過(大幅省算)
+      let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+      for (const p of L) { if (p[0] < bx0) bx0 = p[0]; if (p[0] > bx1) bx1 = p[0]; if (p[1] < by0) by0 = p[1]; if (p[1] > by1) by1 = p[1]; }
+      let hasSta = false;
+      for (const s of st) { if (s.lng > bx0 - R2 && s.lng < bx1 + R2 && s.lat > by0 - R2 && s.lat < by1 + R2) { hasSta = true; break; } }
+      if (!hasSta) continue;
       const pts: number[][] = []; for (let i = 0; i < L.length; i += STEP) pts.push(L[i]); if (pts[pts.length - 1] !== L[L.length - 1]) pts.push(L[L.length - 1]);
-      for (let i = 0; i < pts.length - 1; i++) {
+      // 找「靠近某站」的頂點範圍,first~last 之間(含中間長空檔)一起沿河補牆
+      let first = -1, last = -1;
+      for (let i = 0; i < pts.length; i++) { if (nearSta(pts[i])) { if (first < 0) first = i; last = i; } }
+      if (first < 0) continue;
+      for (let i = first; i < last; i++) {
         const A = pts[i], B = pts[i + 1], mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
-        const h = idw(mid); if (!h) continue;
+        const h = idwAll(mid);
         const excess = Math.max(0, h.cur - h.ref) * exag; // 超出基準才用泥色往上冒
         const mB = BASE, mT = BASE + Math.min(excess, CAP);
         const poly = ribbon(A, B);
@@ -509,7 +522,11 @@ export default function App() {
       wallExagRef.current = wallExag; wallWidthRef.current = wallWidth;
       if (!riverGeoRef.current || !riverGeoRef.current.length) {
         setWallInfo("載入河道幾何中…");
-        try { const g = await fetch("/api/live?ds=rivergeo").then((r) => r.json()); riverGeoRef.current = g.rivers || []; } catch { riverGeoRef.current = []; }
+        for (let attempt = 0; attempt < 3 && !riverGeoRef.current.length; attempt++) {
+          try { const g = await fetch("/api/live?ds=rivergeo").then((r) => r.json()); riverGeoRef.current = g.rivers || []; } catch { riverGeoRef.current = []; }
+          if (!riverGeoRef.current.length) await new Promise((r) => setTimeout(r, 3000)); // Overpass 冷啟動時等一下重試
+        }
+        if (!riverGeoRef.current.length) { setWallInfo("河道幾何載入失敗，稍後再試一次"); return; }
       }
       renderWall(wallExag, wallWidth);
       if (!m.getLayer("ww-base")) {
