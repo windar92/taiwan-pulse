@@ -42,26 +42,41 @@ function seedEvents() {
 }
 
 // —— 國防部即時軍事動態：抓每日共機/共艦(往後累積真實每日資料) ——
-const MND_LIST = "https://www.mnd.gov.tw/PublishTable.aspx?Types=%E5%8D%B3%E6%99%82%E8%BB%8D%E4%BA%8B%E5%8B%95%E6%85%8B&title=%E5%9C%8B%E9%98%B2%E6%B6%88%E6%81%AF";
-async function collectMND() {
-  const UA = { "User-Agent": "Mozilla/5.0 (compatible; taiwan-pulse/1.0)", "Accept": "text/html" };
-  let html = "";
-  try { const r = await fetch(MND_LIST, { headers: UA }); html = await r.text(); } catch (e) { return { ok: false, error: "MND fetch " + e.message }; }
-  // 逐則公告：標題常含日期與「偵獲共機X架次(逾越中線及其延伸線進入…Y架次)、共艦Z艘(次)」
+// 列表頁只有日期+連結，實際架次在各日詳情頁(plaact/<id>)。日期為民國格式 115.07.07。
+const MND_BASE = "https://www.mnd.gov.tw/";
+async function collectMND(pages = 1, max = 40) {
+  const UA = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) taiwan-pulse", "Accept": "text/html,application/xhtml+xml" };
+  const entries = [];
+  for (let pg = 1; pg <= pages; pg++) {
+    let html = "";
+    try { const r = await fetch(`${MND_BASE}news/plaactlist?page=${pg}`, { headers: UA }); html = await r.text(); } catch { break; }
+    const re = /plaact\/(\d+)"[\s\S]{0,160}?(\d{3})\.(\d{2})\.(\d{2})/g;
+    let m; while ((m = re.exec(html)) !== null) {
+      const y = 1911 + Number(m[2]);
+      entries.push({ id: m[1], ev_date: `${y}-${m[3]}-${m[4]}` });
+    }
+  }
+  const seen = new Set();
+  const uniq = entries.filter((e) => (seen.has(e.id) ? false : (seen.add(e.id), true))).slice(0, max);
   const items = [];
-  // 連結 + 標題
-  const re = /plaact\/(\d+)"[^>]*>([^<]*?(\d{3,4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日[^<]*)</g;
-  let m;
-  while ((m = re.exec(html)) !== null) {
-    const title = m[2];
-    const y = 1911 + Number(m[3]), mo = String(Number(m[4])).padStart(2, "0"), d = String(Number(m[5])).padStart(2, "0");
-    const ev_date = `${y}-${mo}-${d}`;
-    const air = title.match(/(\d+)\s*架次/); const midline = title.match(/中線[^0-9]*(\d+)\s*架次/); const sea = title.match(/(\d+)\s*艘/);
-    if (air) items.push({ ev_date, type: "air", zone: "西南空域", lng: ZONE["西南空域"][0], lat: ZONE["西南空域"][1], cnt: Number(air[1]), detail: `共機 ${air[1]} 架次${midline ? `(逾中線 ${midline[1]})` : ""}${sea ? `、共艦 ${sea[1]} 艘` : ""}`, source: "國防部即時軍事動態", url: `https://www.mnd.gov.tw/news/plaact/${m[1]}`, uniq: `${ev_date}|air|mnd` });
-    if (sea) items.push({ ev_date, type: "sea", zone: "台海中線", lng: ZONE["台海中線"][0], lat: ZONE["台海中線"][1], cnt: Number(sea[1]), detail: `共艦 ${sea[1]} 艘(次)`, source: "國防部即時軍事動態", url: `https://www.mnd.gov.tw/news/plaact/${m[1]}`, uniq: `${ev_date}|sea|mnd` });
+  for (let i = 0; i < uniq.length; i += 6) {
+    const chunk = uniq.slice(i, i + 6);
+    const res = await Promise.all(chunk.map(async (e) => {
+      try {
+        const h = await fetch(`${MND_BASE}news/plaact/${e.id}`, { headers: UA }).then((r) => r.text());
+        const txt = h.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+        const air = txt.match(/共機\s*(\d+)\s*架次/); const mid = txt.match(/逾越中線[^0-9]{0,24}?(\d+)\s*架次/); const sea = txt.match(/共艦\s*(\d+)\s*艘/);
+        return { e, air: air ? Number(air[1]) : null, mid: mid ? Number(mid[1]) : null, sea: sea ? Number(sea[1]) : null };
+      } catch { return null; }
+    }));
+    for (const r of res) {
+      if (!r) continue; const { e, air, mid, sea } = r;
+      if (air != null) items.push({ ev_date: e.ev_date, type: "air", zone: "西南空域", lng: ZONE["西南空域"][0], lat: ZONE["西南空域"][1], cnt: air, detail: `共機 ${air} 架次${mid != null ? `(逾中線 ${mid})` : ""}${sea != null ? `、共艦 ${sea} 艘` : ""}`, source: "國防部即時軍事動態", url: `${MND_BASE}news/plaact/${e.id}`, uniq: `${e.ev_date}|air|mnd` });
+      if (sea != null) items.push({ ev_date: e.ev_date, type: "sea", zone: "台海中線", lng: ZONE["台海中線"][0], lat: ZONE["台海中線"][1], cnt: sea, detail: `共艦 ${sea} 艘(次)`, source: "國防部即時軍事動態", url: `${MND_BASE}news/plaact/${e.id}`, uniq: `${e.ev_date}|sea|mnd` });
+    }
   }
   const upserted = await upsertIncursions(items);
-  return { ok: true, parsed: items.length, upserted, sample: items.slice(0, 3) };
+  return { ok: true, entries: uniq.length, parsed: items.length, upserted, sample: items.slice(0, 3) };
 }
 
 export default async function handler(req, res) {
@@ -72,7 +87,7 @@ export default async function handler(req, res) {
       const n = await upsertIncursions(seedEvents());
       return send(res, 200, { ok: true, seeded: n });
     }
-    if (action === "collect") return send(res, 200, await collectMND());
+    if (action === "collect") return send(res, 200, await collectMND(Math.min(Number(url.searchParams.get("pages")) || 1, 8), Math.min(Number(url.searchParams.get("max")) || 40, 90)));
     if (action === "raw") return send(res, 200, { ok: true, raw: await incursionsRaw() });
     // read
     const from = url.searchParams.get("from"), to = url.searchParams.get("to");
