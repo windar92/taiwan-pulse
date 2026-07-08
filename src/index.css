@@ -365,7 +365,8 @@ body,
 .wall-ctrl {
   position: absolute;
   bottom: 46px;
-  right: 10px;
+  left: 10px;
+  right: auto;
   z-index: 4;
   background: rgba(6, 16, 30, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.14);

@@ -505,8 +505,10 @@ export default function App() {
           const P0 = [A[0] + (B[0] - A[0]) * t0, A[1] + (B[1] - A[1]) * t0];
           const P1 = [A[0] + (B[0] - A[0]) * t1, A[1] + (B[1] - A[1]) * t1];
           const curM = cur + (curN - cur) * tm, refM = ref + (refN - ref) * tm;
-          const bT = Math.min(Math.min(curM, refM) * exag, CAP);
-          const mB = Math.min(refM * exag, CAP), mT = Math.min(curM * exag, CAP);
+          const BASE = 500; // 整體墊高:每道牆一律 500m 藍色基座
+          const bT = BASE;
+          const excess = Math.max(0, curM - refM) * exag; // 只有超出基準的部分用泥色往上冒
+          const mB = BASE, mT = BASE + Math.min(excess, CAP);
           const poly = ribbon(P0, P1);
           baseF.push({ type: "Feature", properties: { h: bT }, geometry: { type: "Polygon", coordinates: poly } });
           if (mT > mB + 1) topF.push({ type: "Feature", properties: { base: mB, h: mT }, geometry: { type: "Polygon", coordinates: poly } });
