@@ -38,6 +38,17 @@ function seedEvents() {
   add("2025-06-01", "cable", "台澎海纜", 1, "『宏泰58』切斷台澎海纜後遭 3 艘海巡艦艇攔截；船長被判 3 年(里程碑判例)", "楊献璋簡報(2026臺灣海洋國際論壇)");
   add("2025-12-01", "drill", "高雄", 1, "軍演想定：模擬攔檢載運美援裝備之長榮貨輪；模擬打擊部署於高雄、基隆的海馬斯系統", "楊献璋簡報(2026臺灣海洋國際論壇)");
   add("2024-06-01", "survey", "巴士海峽", 41, "ISW：41 艘中國科研船 2023–2025 測繪，範圍自台灣東部、巴士海峽延伸至第二三島鏈、北極、大西洋；水文供反介入(A2/AD)戰略", "楊献璋簡報/ISW");
+  // —— 共機 ADIZ 年總量(國防部年度統計/媒體彙整；以年總量均分至各月，呈現真實量級的月密度) ——
+  const ANNUAL_AIR = { 2020: 380, 2021: 961, 2022: 1738, 2023: 1703, 2024: 3070 };
+  for (const y of Object.keys(ANNUAL_AIR)) {
+    const yr = Number(y), startM = yr === 2020 ? 9 : 1, nM = 12 - startM + 1;
+    const per = Math.round(ANNUAL_AIR[y] / nM);
+    const [lng, lat] = ZONE["西南空域"];
+    for (let mo = startM; mo <= 12; mo++) {
+      const mm = String(mo).padStart(2, "0");
+      E.push({ ev_date: `${yr}-${mm}-15`, type: "air", zone: "西南空域", lng, lat, cnt: per, detail: `${yr} 年共機擾台約 ${ANNUAL_AIR[y]} 架次(年總量均分至各月示意；國防部年度統計/媒體彙整)`, source: "國防部年度統計/媒體彙整", uniq: `${yr}-${mm}|air-annual` });
+    }
+  }
   return E;
 }
 
