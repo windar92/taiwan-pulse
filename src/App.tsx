@@ -555,7 +555,7 @@ export default function App() {
       if (m.getSource("lake-src")) (m.getSource("lake-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("lake-src", { type: "geojson", data: fc, generateId: true });
-        m.addLayer({ id: "lake-ring", type: "circle", source: "lake-src", filter: ["==", ["get", "warn"], 1], paint: { "circle-radius": 16, "circle-color": "rgba(229,57,53,0.18)", "circle-stroke-color": "#e53935", "circle-stroke-width": 1.5 } });
+        m.addLayer({ id: "lake-ring", type: "circle", source: "lake-src", filter: ["!=", ["get", "alert"], "gray"], paint: { "circle-radius": 16, "circle-color": "rgba(229,57,53,0.18)", "circle-stroke-color": "#e53935", "circle-stroke-width": 1.5 } });
         m.addLayer({ id: "lake-pt", type: "circle", source: "lake-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 6, 11, 11], "circle-color": colorByAlert as any, "circle-stroke-width": 1.6, "circle-stroke-color": "#fff", "circle-opacity": 0.95 } });
         m.addLayer({ id: "lake-label", type: "symbol", source: "lake-src", layout: { "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 10, 11, 13], "text-offset": [0, 1.1], "text-anchor": "top", "text-allow-overlap": false }, paint: { "text-color": "#e3f2fd", "text-halo-color": "#0d1b2a", "text-halo-width": 1.4 } });
         const alertTxt = (a: string) => a === "red" ? "紅色警戒" : a === "orange" ? "橙色警戒" : a === "yellow" ? "黃色警戒" : "監測中(無警戒)";
@@ -570,7 +570,7 @@ export default function App() {
         m.on("mouseleave", "lake-pt", () => { m.getCanvas().style.cursor = ""; });
       }
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
-      const nWarn = d.lakes.filter((l: any) => l.warn).length;
+      const nWarn = d.lakes.filter((l: any) => (l.alert || "gray") !== "gray").length;
       setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}`);
       setLakeOn(true);
     } catch { setLakeInfo("堰塞湖資料載入失敗"); }
