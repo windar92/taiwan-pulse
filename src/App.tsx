@@ -471,7 +471,7 @@ export default function App() {
     try {
       const d = await fetch("/api/live?ds=river&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
       if (!d.ok || !(d.stations || []).length) { setWallInfo("河川水位資料暫時無法取得"); return; }
-      const EXAG = 1500, W = 0.0016, CAP = 60000;
+      const EXAG = 20, W = 0.0016, CAP = 5000;
       const refOf = (s: any) => (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level);
       const st = d.stations.filter((s: any) => typeof s.lng === "number" && typeof s.lat === "number" && typeof s.cur_level === "number");
       const byRiver: Record<string, any[]> = {};
