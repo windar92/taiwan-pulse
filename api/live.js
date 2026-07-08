@@ -117,7 +117,27 @@ async function ocean() {
 }
 
 // ---- 山岳 OSM Overpass(主要供產生 public/peaks.json) ----
-const OVERPASS = "https://overpass-api.de/api/interpreter";
+const OVERPASS_MIRRORS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+];
+// 依序試各鏡像，帶正確標頭(Accept/User-Agent)避免 406/被擋
+async function overpassFetch(query) {
+  let lastErr = "";
+  for (const base of OVERPASS_MIRRORS) {
+    try {
+      const r = await fetch(base, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json", "User-Agent": "taiwan-pulse/1.0 (https://taiwan-pulse-five.vercel.app)" },
+        body: "data=" + encodeURIComponent(query),
+      });
+      if (r.ok) return await r.json();
+      lastErr = base + " " + r.status;
+    } catch (e) { lastErr = base + " " + e.message; }
+  }
+  throw new Error("overpass all failed: " + lastErr);
+}
 const PEAKS_Q = `[out:json][timeout:50];
 (node[natural=peak][name][ele](21.8,120.0,25.4,122.1);
  node[natural=peak][name]["ele:local"](21.8,120.0,25.4,122.1););
@@ -126,9 +146,7 @@ const peakTier = (e) => e >= 3000 ? "百岳級" : e >= 2000 ? "高山" : e >= 10
 let _peakCache = null, _peakAt = 0;
 async function peaks(minEle) {
   if (!_peakCache || Date.now() - _peakAt > 6 * 3600 * 1000) {
-    const r = await fetch(OVERPASS, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: "data=" + encodeURIComponent(PEAKS_Q) });
-    if (!r.ok) throw new Error("overpass " + r.status);
-    const j = await r.json();
+    const j = await overpassFetch(PEAKS_Q);
     const seen = new Set(), out = [];
     for (const el of j.elements || []) {
       const name = el.tags?.name; if (!name) continue;
