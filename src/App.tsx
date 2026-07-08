@@ -483,25 +483,25 @@ export default function App() {
   function renderWall(exag: number, widthMult: number) {
     const m = mapRef.current; if (!m) return;
     const st = wallDataRef.current;
-    const W = 0.0016 * widthMult, CAP = 100000;
+    const W = 0.0016 * widthMult, CAP = 100000, R = 0.03; // R≈3km 搜尋半徑
     const ribbon = (a: number[], b: number[]) => { const dx = b[0] - a[0], dy = b[1] - a[1]; const len = Math.hypot(dx, dy) || 1e-9; const nx = -dy / len * W, ny = dx / len * W; return [[[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny], [a[0] + nx, a[1] + ny]]]; };
-    const byRiver: Record<string, any[]> = {};
-    for (const s of st) { if (!s.river) continue; (byRiver[s.river] ||= []).push(s); }
+    // 由「附近站點」以反距離加權在河線某點內插高度(不靠河名，靠空間鄰近)
+    const idw = (pt: number[]) => { let ws = 0, cur = 0, ref = 0, any = false; for (const s of st) { const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]); if (d > R) continue; any = true; const w = 1 / (d * d + 1e-7); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return any ? { cur: cur / ws, ref: ref / ws } : null; };
     const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
     for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     let feats: any[] = [];
     try { feats = m.querySourceFeatures("composite", { sourceLayer: "waterway" }); } catch { }
     for (const f of feats) {
-      const nm = f.properties && (f.properties["name_zh-Hant"] || f.properties.name); if (!nm) continue;
-      const stations = byRiver[nm]; if (!stations || !stations.length) continue;
+      const cls = f.properties && f.properties.class;
+      if (cls && !["river", "stream", "canal", "drain"].includes(cls)) continue;
       const g = f.geometry; const lines: number[][][] = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
       for (const line of lines) {
         for (let i = 0; i < line.length - 1; i++) {
           const A = line[i], B = line[i + 1];
-          const hA = riverInterp(A, stations), hB = riverInterp(B, stations);
-          const curM = (hA.cur + hB.cur) / 2, refM = (hA.ref + hB.ref) / 2;
-          const bT = Math.min(Math.min(curM, refM) * exag, CAP);
-          const mB = Math.min(refM * exag, CAP), mT = Math.min(curM * exag, CAP);
+          const mid = [(A[0] + B[0]) / 2, (A[1] + B[1]) / 2];
+          const h = idw(mid); if (!h) continue;
+          const bT = Math.min(Math.min(h.cur, h.ref) * exag, CAP);
+          const mB = Math.min(h.ref * exag, CAP), mT = Math.min(h.cur * exag, CAP);
           const poly = ribbon(A, B);
           baseF.push({ type: "Feature", properties: { h: bT }, geometry: { type: "Polygon", coordinates: poly } });
           if (mT > mB + 1) topF.push({ type: "Feature", properties: { base: mB, h: mT }, geometry: { type: "Polygon", coordinates: poly } });
