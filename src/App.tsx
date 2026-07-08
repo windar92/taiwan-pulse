@@ -87,6 +87,9 @@ export default function App() {
   const [wallExag, setWallExag] = useState(20);
   const [wallWidth, setWallWidth] = useState(1);
   const wallDataRef = useRef<any[]>([]);
+  const wallExagRef = useRef(20);
+  const wallWidthRef = useRef(1);
+  const wallMoveRef = useRef<any>(null);
   const oceanCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const hoverIdRef = useRef<{ rain: any; temp: any }>({ rain: null, temp: null });
   const [quakeList, setQuakeList] = useState<any[]>([]);
@@ -465,47 +468,46 @@ export default function App() {
       setPeaksOn(true);
     } catch { setPeaksInfo("山岳資料載入失敗"); }
   }
-  // ===== 河川水位立體水牆 =====
-  function buildWall(st: any[], exag: number, widthMult: number) {
-    const CAP = 100000, W = 0.0016 * widthMult;
-    const refOf = (s: any) => (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level);
-    const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
+  // ===== 河川水位立體水牆(鋪在 waterway 河線幾何上) =====
+  function wallRefOf(s: any) { return (typeof s.avg_level === "number" && s.cnt_level >= 6) ? s.avg_level : (s.warn3 ?? s.warn2 ?? s.warn1 ?? s.cur_level); }
+  // 由同河站點以反距離加權(IDW)在河線上某點內插出 目前/基準 水位
+  function riverInterp(pt: number[], stations: any[]) {
+    let wsum = 0, cur = 0, ref = 0, nd = Infinity, nc = 0, nr = 0;
+    for (const s of stations) {
+      const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]);
+      if (d < nd) { nd = d; nc = s.cur_level; nr = wallRefOf(s); }
+      const w = 1 / (d * d + 1e-6); wsum += w; cur += w * s.cur_level; ref += w * wallRefOf(s);
+    }
+    return wsum > 0 ? { cur: cur / wsum, ref: ref / wsum } : { cur: nc, ref: nr };
+  }
+  function renderWall(exag: number, widthMult: number) {
+    const m = mapRef.current; if (!m) return;
+    const st = wallDataRef.current;
+    const W = 0.0016 * widthMult, CAP = 100000;
     const ribbon = (a: number[], b: number[]) => { const dx = b[0] - a[0], dy = b[1] - a[1]; const len = Math.hypot(dx, dy) || 1e-9; const nx = -dy / len * W, ny = dx / len * W; return [[[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny], [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny], [a[0] + nx, a[1] + ny]]]; };
-    for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     const byRiver: Record<string, any[]> = {};
-    for (const s of st) { if (!s.river) continue; (byRiver[s.river] ||= []).push(s); } // 嚴格同河，空河名不連
-    for (const k in byRiver) {
-      const arr = byRiver[k];
-      let minx = Infinity, maxx = -Infinity, miny = Infinity, maxy = -Infinity;
-      for (const s of arr) { minx = Math.min(minx, s.lng); maxx = Math.max(maxx, s.lng); miny = Math.min(miny, s.lat); maxy = Math.max(maxy, s.lat); }
-      const byLon = (maxx - minx) >= (maxy - miny);
-      arr.sort((p, q) => byLon ? p.lng - q.lng : p.lat - q.lat);
-      for (let i = 0; i < arr.length - 1; i++) {
-        const s = arr[i], nxt = arr[i + 1];
-        if (Math.hypot(nxt.lng - s.lng, nxt.lat - s.lat) > 0.4) continue;
-        const ref = refOf(s), refN = refOf(nxt), cur = s.cur_level, curN = nxt.cur_level;
-        const A = [s.lng, s.lat], B = [nxt.lng, nxt.lat];
-        // 沿線細分內插，平滑無階梯
-        const N = 8;
-        for (let j = 0; j < N; j++) {
-          const t0 = j / N, t1 = (j + 1) / N;
-          const P0 = [A[0] + (B[0] - A[0]) * t0, A[1] + (B[1] - A[1]) * t0];
-          const P1 = [A[0] + (B[0] - A[0]) * t1, A[1] + (B[1] - A[1]) * t1];
-          const tm = (t0 + t1) / 2;
-          const curM = cur + (curN - cur) * tm, refM = ref + (refN - ref) * tm;
+    for (const s of st) { if (!s.river) continue; (byRiver[s.river] ||= []).push(s); }
+    const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
+    for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+    let feats: any[] = [];
+    try { feats = m.querySourceFeatures("composite", { sourceLayer: "waterway" }); } catch { }
+    for (const f of feats) {
+      const nm = f.properties && (f.properties["name_zh-Hant"] || f.properties.name); if (!nm) continue;
+      const stations = byRiver[nm]; if (!stations || !stations.length) continue;
+      const g = f.geometry; const lines: number[][][] = g.type === "LineString" ? [g.coordinates] : g.type === "MultiLineString" ? g.coordinates : [];
+      for (const line of lines) {
+        for (let i = 0; i < line.length - 1; i++) {
+          const A = line[i], B = line[i + 1];
+          const hA = riverInterp(A, stations), hB = riverInterp(B, stations);
+          const curM = (hA.cur + hB.cur) / 2, refM = (hA.ref + hB.ref) / 2;
           const bT = Math.min(Math.min(curM, refM) * exag, CAP);
           const mB = Math.min(refM * exag, CAP), mT = Math.min(curM * exag, CAP);
-          const poly = ribbon(P0, P1);
+          const poly = ribbon(A, B);
           baseF.push({ type: "Feature", properties: { h: bT }, geometry: { type: "Polygon", coordinates: poly } });
           if (mT > mB + 1) topF.push({ type: "Feature", properties: { base: mB, h: mT }, geometry: { type: "Polygon", coordinates: poly } });
         }
       }
     }
-    return { baseF, topF, ptF };
-  }
-  function renderWall(exag: number, widthMult: number) {
-    const m = mapRef.current; if (!m) return;
-    const { baseF, topF, ptF } = buildWall(wallDataRef.current, exag, widthMult);
     setSrc("ww-base-src", { type: "FeatureCollection", features: baseF });
     setSrc("ww-top-src", { type: "FeatureCollection", features: topF });
     setSrc("ww-pt-src", { type: "FeatureCollection", features: ptF });
@@ -514,11 +516,12 @@ export default function App() {
     const m = mapRef.current; if (!m) return;
     const on = !wallOn;
     const ids = ["ww-base", "ww-top", "ww-pt"];
-    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); wallPopRef.current?.remove(); setWallOn(false); setWallInfo(""); return; }
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); wallPopRef.current?.remove(); if (wallMoveRef.current) { m.off("moveend", wallMoveRef.current); wallMoveRef.current = null; } setWallOn(false); setWallInfo(""); return; }
     try {
       const d = await fetch("/api/live?ds=river&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
       if (!d.ok || !(d.stations || []).length) { setWallInfo("河川水位資料暫時無法取得"); return; }
       wallDataRef.current = d.stations.filter((s: any) => typeof s.lng === "number" && typeof s.lat === "number" && typeof s.cur_level === "number");
+      wallExagRef.current = wallExag; wallWidthRef.current = wallWidth;
       renderWall(wallExag, wallWidth);
       if (!m.getLayer("ww-base")) {
         m.addLayer({ id: "ww-base", type: "fill-extrusion", source: "ww-base-src", paint: { "fill-extrusion-color": "#0b3d91", "fill-extrusion-base": 0, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.82 } });
@@ -529,7 +532,8 @@ export default function App() {
         m.on("click", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) : "累積中"; const html = `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>目前水位 ${Number(p.cur).toFixed(2)} m<br/>平均 ${avg} m<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m</div>`; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m); });
       }
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
-      setWallInfo(`水牆 ${wallDataRef.current.length} 站（藍=平均以下、泥=超出平均）`);
+      if (!wallMoveRef.current) { let t: any; wallMoveRef.current = () => { clearTimeout(t); t = setTimeout(() => renderWall(wallExagRef.current, wallWidthRef.current), 250); }; m.on("moveend", wallMoveRef.current); }
+      setWallInfo(`水牆 ${wallDataRef.current.length} 站（沿河道，隨縮放重建）`);
       setWallOn(true);
     } catch { setWallInfo("河川水位載入失敗"); }
   }
@@ -975,10 +979,10 @@ export default function App() {
       {wallOn && (
         <div className="wall-ctrl">
           <label>高度誇張 <b>{wallExag}×</b>
-            <input type="range" min={1} max={300} step={1} value={wallExag} onChange={(e) => { const v = Number(e.target.value); setWallExag(v); renderWall(v, wallWidth); }} />
+            <input type="range" min={1} max={300} step={1} value={wallExag} onChange={(e) => { const v = Number(e.target.value); setWallExag(v); wallExagRef.current = v; renderWall(v, wallWidthRef.current); }} />
           </label>
           <label>寬度 <b>{wallWidth.toFixed(1)}×</b>
-            <input type="range" min={1} max={5} step={0.5} value={wallWidth} onChange={(e) => { const v = Number(e.target.value); setWallWidth(v); renderWall(wallExag, v); }} />
+            <input type="range" min={1} max={5} step={0.5} value={wallWidth} onChange={(e) => { const v = Number(e.target.value); setWallWidth(v); wallWidthRef.current = v; renderWall(wallExagRef.current, v); }} />
           </label>
         </div>
       )}
