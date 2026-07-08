@@ -50,6 +50,7 @@ export default function App() {
   const [visible, setVisible] = useState<Set<Cat>>(new Set(CATS.map((c) => c.id)));
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showMemo, setShowMemo] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(true);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat">("dark");
   const [satOn, setSatOn] = useState(false);
@@ -1129,24 +1130,35 @@ export default function App() {
         <button className="ctr-btn" onClick={recenter} title="回到我的置中位置">⌖</button>
       </div>
 
-      <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：深色 → 地形(等高線) → 衛星實景">
-        {BASEMAP_LABEL[basemap]}
+      <button className="layer-toggle" onClick={() => setMenuOpen((o) => !o)} title="圖層選單：開關各資料圖層">
+        {menuOpen ? "✕ 圖層" : "☰ 圖層"}
       </button>
-      <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱(近1小時雨量)">
-        雨量
-      </button>
-      {rainInfo && <div className="rain-info">{rainInfo}</div>}
-      <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期顯著有感地震：震央 + 不規則震度擴散範圍">
-        地震
-      </button>
-      {quakeInfo && <div className="quake-info">{quakeInfo}</div>}
-      <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱(藍冷紅熱，20°C 為中點)">
-        氣溫
-      </button>
-      {tempInfo && <div className="temp-info">{tempInfo}</div>}
-      <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)，點站看最新數據">
-        測站
-      </button>
+      <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：深色 → 地形(等高線) → 衛星實景">{BASEMAP_LABEL[basemap]}</button>
+        <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱(近1小時雨量)">雨量</button>
+        {rainInfo && <div className="rain-info">{rainInfo}</div>}
+        <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期顯著有感地震：震央 + 不規則震度擴散範圍">地震</button>
+        {quakeInfo && <div className="quake-info">{quakeInfo}</div>}
+        <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱(藍冷紅熱，20°C 為中點)">氣溫</button>
+        {tempInfo && <div className="temp-info">{tempInfo}</div>}
+        <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)，點站看最新數據">測站</button>
+        <button className={"ty-btn" + (typhoonOn ? " on" : "")} onClick={toggleTyphoon} title="颱風路徑、暴風圈與預報警戒圈">颱風</button>
+        {typhoonInfo && <div className="ty-info">{typhoonInfo}</div>}
+        <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
+        {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
+        <button className={"river-btn" + (riversOn ? " on" : "")} onClick={toggleRivers} title="溪流河川:常態畫線+河名，滑過高亮整條">河流</button>
+        <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">中國船</button>
+        {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
+        <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層(點開後可勾選)">山岳</button>
+        {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
+        <button className={"sat-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="衛星空照:NASA GIBS MODIS 每日近即時真彩影像疊圖">空照</button>
+        <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):監測中堰塞湖，馬太鞍溪為真實湖體">堰塞湖</button>
+        {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
+        <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度">中國入侵</button>
+        {gzInfo && <div className="gz-info">{gzInfo}</div>}
+        <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均">水牆</button>
+        {wallInfo && <div className="wall-info">{wallInfo}</div>}
+      </div>
       {staOn && (
         <div className="sta-panel">
           {([["weather", "氣象站", "#E69F00"], ["rain", "雨量站", "#0072B2"], ["quake", "地震站", "#009E73"]] as const).map(([k, label, c]) => (
@@ -1157,37 +1169,6 @@ export default function App() {
           ))}
         </div>
       )}
-
-      <button className={"ty-btn" + (typhoonOn ? " on" : "")} onClick={toggleTyphoon} title="颱風路徑、暴風圈與預報警戒圈">
-        颱風
-      </button>
-      {typhoonInfo && <div className="ty-info">{typhoonInfo}</div>}
-      <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">
-        海溫
-      </button>
-      {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
-      <button className={"river-btn" + (riversOn ? " on" : "")} onClick={toggleRivers} title="溪流河川:常態畫線+河名，滑過高亮整條">
-        河流
-      </button>
-      <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">
-        中國船
-      </button>
-      {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
-      <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:OSM 名稱+標高，≥3000m 為百岳級，滑過高亮">
-        山岳
-      </button>
-      {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
-      <button className={"sat-btn" + (satOn ? " on" : "")} onClick={toggleSat} title="衛星空照:NASA GIBS MODIS 每日近即時真彩影像疊圖">
-        空照
-      </button>
-      <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):目前監測中的堰塞湖與警戒等級，位置概略、詳情連官方">
-        堰塞湖
-      </button>
-      {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
-      <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度(共機/共艦/海警/海纜/科研/軍演)">
-        中國入侵
-      </button>
-      {gzInfo && <div className="gz-info">{gzInfo}</div>}
       {gzOn && (
         <div className="gz-ctrl">
           <div className="gz-range-lbl">時間範圍　<b>{idxLabel(gzFrom)} → {idxLabel(gzTo)}</b></div>
@@ -1198,10 +1179,6 @@ export default function App() {
           </div>
         </div>
       )}
-      <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均，點站看數值">
-        水牆
-      </button>
-      {wallInfo && <div className="wall-info">{wallInfo}</div>}
       {wallOn && (
         <div className="wall-ctrl">
           <label>高度誇張 <b>{wallExag}×</b>
