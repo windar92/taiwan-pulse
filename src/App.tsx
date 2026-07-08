@@ -85,6 +85,8 @@ export default function App() {
   const [lakeOn, setLakeOn] = useState(false);
   const [lakeInfo, setLakeInfo] = useState<string>("");
   const lakePopRef = useRef<mapboxgl.Popup | null>(null);
+  const [gzOn, setGzOn] = useState(false);
+  const gzPopRef = useRef<mapboxgl.Popup | null>(null);
   const [wallOn, setWallOn] = useState(false);
   const [wallInfo, setWallInfo] = useState<string>("");
   const wallPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -528,7 +530,7 @@ export default function App() {
   // 位置為各溪概略座標(端點未提供座標)，僅供定位參考，詳情連官方專區
   function lakeCoord(name: string): [number, number] {
     const RIV: Record<string, [number, number]> = {
-      萬里溪: [121.44, 23.77], 馬太鞍溪: [121.41, 23.65], 泰崗溪: [121.31, 24.53],
+      萬里溪: [121.44, 23.77], 馬太鞍溪: [121.2955, 23.6995], 泰崗溪: [121.31, 24.53],
       木瓜溪: [121.45, 23.98], 樂樂溪: [121.15, 23.40], 豐坪溪: [121.22, 23.47],
       五十溪: [121.55, 24.60], 大南溪: [121.00, 22.78], 大曼溪: [121.33, 24.65],
       清水溪: [120.72, 23.66], 加走寮溪: [120.72, 23.66],
@@ -538,10 +540,21 @@ export default function App() {
     for (const k in CTY) if (name.includes(k)) return CTY[k];
     return [121.0, 23.7];
   }
+  // 真實湖體幾何(由 AWS 30m DEM 區域成長至官方面積推得，反算水位與官方吻合)
+  const LAKE_GEOM: Record<string, any> = {
+    馬太鞍溪: {
+      // 最大範圍 ~59.7 公頃(模型水面約 1104m，官方溢流前約 1110m)
+      max: [[121.2917,23.7023],[121.2927,23.702],[121.2937,23.7016],[121.2948,23.7013],[121.2958,23.702],[121.296,23.7014],[121.2956,23.7005],[121.2954,23.6995],[121.2951,23.6986],[121.2949,23.6976],[121.2946,23.6967],[121.294,23.696],[121.293,23.6956],[121.2919,23.6952],[121.291,23.6946],[121.29,23.6943],[121.2889,23.6942],[121.2879,23.6943],[121.2869,23.6944],[121.2861,23.6937],[121.2856,23.6928],[121.2848,23.6919],[121.2838,23.6911],[121.2831,23.6913],[121.2834,23.6923],[121.284,23.6932],[121.2846,23.6941],[121.2848,23.695],[121.2858,23.6959],[121.2865,23.6967],[121.2876,23.6969],[121.2886,23.6975],[121.2888,23.6985],[121.2896,23.699],[121.2906,23.6995],[121.2913,23.7005],[121.2914,23.7014],[121.2916,23.7023],[121.2917,23.7023]],
+      // 目前範圍 ~12.6 公頃(2025/10/23，水面約 988m，官方約 1010m)
+      cur: [[121.2956,23.7005],[121.2955,23.7001],[121.2955,23.6997],[121.2953,23.6992],[121.2952,23.6987],[121.295,23.6983],[121.2949,23.6978],[121.2944,23.6976],[121.2939,23.6977],[121.2934,23.6977],[121.2929,23.6977],[121.2924,23.6975],[121.2918,23.6972],[121.2913,23.6968],[121.2908,23.6964],[121.2903,23.6963],[121.2898,23.6962],[121.2894,23.6963],[121.2896,23.6968],[121.29,23.6972],[121.2904,23.6977],[121.2908,23.6982],[121.2912,23.6987],[121.2916,23.699],[121.2921,23.699],[121.2926,23.6994],[121.2931,23.6993],[121.2936,23.6995],[121.2941,23.6998],[121.2946,23.7001],[121.2951,23.7005],[121.2956,23.7005],[121.2956,23.7005]],
+      dam: [[121.295,23.6978],[121.296,23.7011]],
+      desc: "馬太鞍溪堰塞湖(花蓮萬榮)：2025/7 颱風誘發崩塌形成，9/4 滿水位約 1110m、湖面最大約 59.7 公頃、壩前水深逾 200m；9 月溢流致光復重災，10/23 縮至約 12.6 公頃。深藍=目前殘留湖面，淺藍=最大淹沒範圍，紅線=崩塌壩體。範圍由 30m DEM 淹沒推估(反算水位與官方吻合)。",
+    },
+  };
   async function toggleLake() {
     const m = mapRef.current; if (!m) return;
     const on = !lakeOn;
-    const ids = ["lake-ring", "lake-pt", "lake-label"];
+    const ids = ["lake-max-fill", "lake-max-line", "lake-cur-fill", "lake-dam", "lake-ring", "lake-pt", "lake-label"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); lakePopRef.current?.remove(); setLakeOn(false); setLakeInfo(""); return; }
     try {
       const d = await fetch("/api/live?ds=barrierlake&t=" + Date.now()).then((r) => r.json());
@@ -569,6 +582,29 @@ export default function App() {
         m.on("mouseenter", "lake-pt", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "lake-pt", () => { m.getCanvas().style.cursor = ""; });
       }
+      // 真實湖體(有 DEM 幾何者)：最大範圍/目前湖面/壩體
+      const polyFeats: any[] = [], damFeats: any[] = [];
+      for (const l of d.lakes) {
+        const g = Object.keys(LAKE_GEOM).find((k) => (l.name || "").includes(k));
+        if (!g) continue; const geom = LAKE_GEOM[g];
+        polyFeats.push({ type: "Feature", properties: { kind: "max", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.max] } });
+        polyFeats.push({ type: "Feature", properties: { kind: "cur", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.cur] } });
+        damFeats.push({ type: "Feature", properties: { name: l.name }, geometry: { type: "LineString", coordinates: geom.dam } });
+      }
+      const polyFc = { type: "FeatureCollection", features: polyFeats } as any;
+      const damFc = { type: "FeatureCollection", features: damFeats } as any;
+      if (m.getSource("lake-poly-src")) (m.getSource("lake-poly-src") as mapboxgl.GeoJSONSource).setData(polyFc);
+      else if (polyFeats.length) {
+        m.addSource("lake-poly-src", { type: "geojson", data: polyFc });
+        m.addSource("lake-dam-src", { type: "geojson", data: damFc });
+        m.addLayer({ id: "lake-max-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "fill-color": "#4a90d9", "fill-opacity": 0.28 } });
+        m.addLayer({ id: "lake-max-line", type: "line", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "line-color": "#7fb2e5", "line-width": 1, "line-dasharray": [2, 1.5], "line-opacity": 0.8 } });
+        m.addLayer({ id: "lake-cur-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "cur"], paint: { "fill-color": "#0b3d91", "fill-opacity": 0.62 } });
+        m.addLayer({ id: "lake-dam", type: "line", source: "lake-dam-src", paint: { "line-color": "#c62828", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 6], "line-opacity": 0.9 } });
+        m.on("click", "lake-max-fill", (e) => { const p = e.features?.[0]?.properties as any; if (!p) return; lakePopRef.current?.remove(); lakePopRef.current = new mapboxgl.Popup({ offset: 6, className: "hover-tip", maxWidth: "300px" }).setLngLat(e.lngLat).setHTML(`<div class="qpop"><b>${p.name}</b><br/><span style="opacity:.88">${p.desc}</span></div>`).addTo(m); });
+        m.on("mouseenter", "lake-max-fill", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "lake-max-fill", () => { m.getCanvas().style.cursor = ""; });
+      } else if (m.getSource("lake-dam-src")) (m.getSource("lake-dam-src") as mapboxgl.GeoJSONSource).setData(damFc);
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
       const nWarn = d.lakes.filter((l: any) => (l.alert || "gray") !== "gray").length;
       setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}`);
