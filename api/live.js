@@ -157,7 +157,8 @@ async function peaks(minEle) {
       if (!Number.isFinite(ele) || ele <= 0 || ele > 4200) continue; // 台灣最高玉山 3952m，超過視為髒資料
       if (typeof el.lat !== "number" || typeof el.lon !== "number") continue;
       const k = name + "@" + el.lat.toFixed(3); if (seen.has(k)) continue; seen.add(k);
-      const cls2 = BAIYUE.has(name) ? "百岳" : (XIAOBAI.has(name) ? "小百岳" : "");
+      // 百岳全 ≥3000m、小百岳全 <2700m：小百岳命中限 ele≤2800，濾掉同名高峰誤配
+      const cls2 = BAIYUE.has(name) ? "百岳" : (XIAOBAI.has(name) && ele <= 2800 ? "小百岳" : "");
       out.push({ name, name_en: el.tags?.["name:en"] || null, lng: el.lon, lat: el.lat, ele, tier: peakTier(ele), cls2 });
     }
     out.sort((a, b) => b.ele - a.ele);
