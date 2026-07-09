@@ -676,11 +676,31 @@ export default function App() {
   function idxLabel(idx: number) { const y = 2020 + Math.floor((idx + 8) / 12); const mo = ((idx + 8) % 12) + 1; return `${y}/${String(mo).padStart(2, "0")}`; }
   const GZ_COLOR = ["match", ["get", "type"], "air", "#ff6d00", "drill", "#d50000", "coastguard", "#ff9100", "cable", "#ffd600", "sea", "#2962ff", "survey", "#aa00ff", "#bbbbbb"];
   const GZ_TYPE_TXT: Record<string, string> = { air: "共機空域侵擾", drill: "圍台軍演/軍事威懾", coastguard: "海警灰色地帶", cable: "海纜破壞", sea: "共艦動態", survey: "科研測繪" };
+  // 依類型的小圖示(飛機/軍艦/海警船/海纜船)
+  const GZ_ICONS: Record<string, string> = {
+    "ic-plane": `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24'><path fill='%23ff8f00' stroke='%23000' stroke-width='0.6' d='M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z'/></svg>`,
+    "ic-warship": `<svg xmlns='http://www.w3.org/2000/svg' width='28' height='20' viewBox='0 0 28 20'><g stroke='%23000' stroke-width='0.6'><path fill='%23e53935' d='M1 13 H27 L23 18 H5 Z'/><rect fill='%23c62828' x='9' y='7' width='9' height='6'/><rect fill='%23c62828' x='13' y='2' width='2' height='5'/><path fill='none' stroke='%23c62828' stroke-width='1' d='M15 4 L21 6'/></g></svg>`,
+    "ic-patrol": `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='18' viewBox='0 0 26 18'><g stroke='%23000' stroke-width='0.6'><path fill='%2300b0ff' d='M2 11 H24 L20 16 H6 Z'/><path fill='%230091ea' d='M8 6 H17 L19 11 H8 Z'/></g></svg>`,
+    "ic-cable": `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='24' viewBox='0 0 26 24'><g stroke='%23000' stroke-width='0.6'><path fill='%23ffd600' d='M2 10 H24 L20 15 H6 Z'/><rect fill='%23ffab00' x='8' y='5' width='9' height='5'/></g><path fill='none' stroke='%23ffd600' stroke-width='1.6' d='M13 15 V20 Q13 22.5 15.5 22 Q17 21.5 16 20'/></svg>`,
+  };
+  function gzIconFor(type: string) { return type === "air" ? "ic-plane" : (type === "sea" || type === "drill") ? "ic-warship" : type === "cable" ? "ic-cable" : "ic-patrol"; }
+  function loadImg(svg: string): Promise<HTMLImageElement | null> { return new Promise((res) => { const img = new Image(); img.onload = () => res(img); img.onerror = () => res(null); img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg.replace(/%23/g, "#")).replace(/#/g, "%23"); }); }
+  async function ensureGzIcons(m: mapboxgl.Map) {
+    for (const [name, svg] of Object.entries(GZ_ICONS)) { if (m.hasImage(name)) continue; const img = await loadImg(svg); if (img && !m.hasImage(name)) m.addImage(name, img); }
+  }
   function renderIncursions(fromIdx: number, toIdx: number) {
     const m = mapRef.current; if (!m) return;
     const data = gzDataRef.current || [];
     const feats = data.filter((e) => { const i = monthIdx(e.ev_date); return i >= fromIdx && i <= toIdx && typeof e.lng === "number"; })
       .map((e) => ({ type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] }, properties: { type: e.type, cnt: e.cnt || 1, detail: e.detail, source: e.source, url: e.url || "", zone: e.zone, date: e.ev_date } }));
+    // 疊在同一座標的事件拆成獨立單點(以螺旋散開)，避免糊成一團
+    const groups: Record<string, any[]> = {};
+    for (const f of feats) { const k = (f.geometry.coordinates as number[]).map((c) => c.toFixed(3)).join(","); (groups[k] || (groups[k] = [])).push(f); }
+    for (const k in groups) {
+      const arr = groups[k]; if (arr.length < 2) continue;
+      const [bx, by] = arr[0].geometry.coordinates as number[];
+      arr.forEach((f, i) => { const ring = Math.floor(i / 10), ang = (i % 10) / 10 * 2 * Math.PI + ring * 0.6; const r = 0.02 + ring * 0.016; f.geometry.coordinates = [bx + r * Math.cos(ang) / Math.max(0.3, Math.cos(by * Math.PI / 180)), by + r * Math.sin(ang)]; });
+    }
     const fc = { type: "FeatureCollection", features: feats } as any;
     if (m.getSource("gz-src")) (m.getSource("gz-src") as mapboxgl.GeoJSONSource).setData(fc);
     const total = feats.reduce((s: number, f: any) => s + (f.properties.cnt || 1), 0);
@@ -689,7 +709,7 @@ export default function App() {
   async function toggleGrayZone() {
     const m = mapRef.current; if (!m) return;
     const on = !gzOn;
-    const ids = ["gz-heat", "gz-pt", "gz-lbl"];
+    const ids = ["gz-pt"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); gzPopRef.current?.remove(); setGzOn(false); setGzInfo(""); return; }
     try {
       const d = await fetch("/api/intel?action=read&t=" + Date.now()).then((r) => r.json());
@@ -699,9 +719,8 @@ export default function App() {
       setGzMax(maxIdx); setGzFrom(0); setGzTo(maxIdx);
       if (!m.getSource("gz-src")) {
         m.addSource("gz-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } as any });
-        m.addLayer({ id: "gz-heat", type: "heatmap", source: "gz-src", paint: { "heatmap-weight": ["interpolate", ["linear"], ["get", "cnt"], 1, 0.4, 50, 1, 150, 2], "heatmap-intensity": 1.1, "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 4, 22, 8, 44], "heatmap-opacity": 0.55, "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"], 0, "rgba(0,0,0,0)", 0.2, "#2962ff", 0.4, "#00e5ff", 0.6, "#ffd600", 0.8, "#ff6d00", 1, "#d50000"] } });
-        m.addLayer({ id: "gz-pt", type: "circle", source: "gz-src", paint: { "circle-radius": ["interpolate", ["linear"], ["get", "cnt"], 1, 5, 20, 11, 60, 16, 150, 22], "circle-color": GZ_COLOR as any, "circle-opacity": 0.82, "circle-stroke-width": 1, "circle-stroke-color": "rgba(255,255,255,0.8)" } });
-        m.addLayer({ id: "gz-lbl", type: "symbol", source: "gz-src", minzoom: 6, layout: { "text-field": ["case", [">", ["get", "cnt"], 1], ["to-string", ["get", "cnt"]], ""], "text-size": 11, "text-allow-overlap": false }, paint: { "text-color": "#fff", "text-halo-color": "#000", "text-halo-width": 1 } });
+        await ensureGzIcons(m);
+        m.addLayer({ id: "gz-pt", type: "symbol", source: "gz-src", layout: { "icon-image": ["match", ["get", "type"], "air", "ic-plane", "sea", "ic-warship", "drill", "ic-warship", "cable", "ic-cable", "ic-patrol"], "icon-size": ["interpolate", ["linear"], ["zoom"], 4, 0.5, 8, 0.75, 12, 1], "icon-allow-overlap": true, "icon-ignore-placement": true } });
         m.on("click", "gz-pt", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
           gzPopRef.current?.remove();
@@ -729,7 +748,7 @@ export default function App() {
     // IDW 內插:不設硬截斷,長空檔中間的點主要由前後兩個最近站決定(沿河補牆)
     const idwAll = (pt: number[]) => { let ws = 0, cur = 0, ref = 0; for (const s of st) { const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]); const w = 1 / (d * d + 1e-6); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return { cur: cur / ws, ref: ref / ws }; };
     const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
-    for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3 }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+    for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "" }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     for (const river of geo) {
       const L = river.coords; if (!L || L.length < 2) continue;
       // bbox 預剪:整條河外接框附近都沒站就跳過(大幅省算)
@@ -780,12 +799,13 @@ export default function App() {
         m.addLayer({ id: "ww-base", type: "fill-extrusion", source: "ww-base-src", paint: { "fill-extrusion-color": "#0b3d91", "fill-extrusion-base": 0, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.82 } });
         m.addLayer({ id: "ww-top", type: "fill-extrusion", source: "ww-top-src", paint: { "fill-extrusion-color": "#7a4a21", "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.9 } });
         m.addLayer({ id: "ww-pt", type: "circle", source: "ww-pt-src", paint: { "circle-radius": 3, "circle-color": "#9fd8ff", "circle-stroke-width": 0.6, "circle-stroke-color": "#08304e" } });
-        m.on("mouseenter", "ww-pt", () => { m.getCanvas().style.cursor = "pointer"; });
-        m.on("mouseleave", "ww-pt", () => { m.getCanvas().style.cursor = ""; });
-        m.on("click", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; const p = f.properties as any; const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) : "累積中"; const html = `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>目前水位 ${Number(p.cur).toFixed(2)} m<br/>平均 ${avg} m<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m</div>`; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(html).addTo(m); });
+        const wallHtml = (p: any) => { const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) + " m" : "累積中"; const tt = p.t ? String(p.t).replace("T", " ").slice(0, 16) : ""; return `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>即時水量高度 <b>${Number(p.cur).toFixed(2)} m</b><br/>平均水量高度 ${avg}<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m${tt ? `<br/><span style="opacity:.6;font-size:11px">觀測 ${tt}</span>` : ""}</div>`; };
+        m.on("mousemove", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; m.getCanvas().style.cursor = "pointer"; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(wallHtml(f.properties)).addTo(m); });
+        m.on("mouseleave", "ww-pt", () => { m.getCanvas().style.cursor = ""; wallPopRef.current?.remove(); });
       }
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
-      setWallInfo(`水牆 ${wallDataRef.current.length} 站・沿河道（藍=基座、泥=超出基準）`);
+      const t0 = wallDataRef.current.map((s: any) => s.cur_time).filter(Boolean).sort().slice(-1)[0];
+      setWallInfo(`即時水位高度 ${wallDataRef.current.length} 站（藍=平均水量、泥=即時超出平均）${t0 ? `　資料 ${String(t0).replace("T", " ").slice(0, 16)}` : ""}`);
       setWallOn(true);
     } catch { setWallInfo("河川水位載入失敗"); }
   }
@@ -1207,6 +1227,8 @@ export default function App() {
         <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
         {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
         <button className={"river-btn" + (riversOn ? " on" : "")} onClick={toggleRivers} title="溪流河川:常態畫線+河名，滑過高亮整條">河流</button>
+        <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川即時水位高度(併入河流)：藍=平均水量、泥=即時超出平均，滑過站點看數值與時間">└ 即時水位高度</button>
+        {wallInfo && <div className="wall-info">{wallInfo}</div>}
         <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">中國船</button>
         {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
         <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層(點開後可勾選)">山岳</button>
@@ -1215,8 +1237,6 @@ export default function App() {
         {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
         <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度">中國入侵</button>
         {gzInfo && <div className="gz-info">{gzInfo}</div>}
-        <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川水位立體水牆:牆高=目前水位，藍=平均以下、泥=超出平均">水牆</button>
-        {wallInfo && <div className="wall-info">{wallInfo}</div>}
       </div>
       {staOn && (
         <div className="sta-panel">
