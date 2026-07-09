@@ -55,8 +55,10 @@ export default function App() {
   const [newsOpen, setNewsOpen] = useState(false);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
-  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs">("dark");
+  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis">("dark");
   const [gibsInfo, setGibsInfo] = useState<string>("");
+  const visModeRef = useRef<"day" | "night" | "">("");
+  const countyGeoRef = useRef<any>(null);
   const [satOn, setSatOn] = useState(false);
   const [sel, setSel] = useState<Sel | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -235,6 +237,7 @@ export default function App() {
 
       try {
         const gj = await fetch(COUNTY_GEOJSON).then((r) => r.json());
+        countyGeoRef.current = gj;
         const props = gj.features?.[0]?.properties || {};
         countyKeyRef.current = Object.keys(props).find((k) => /[縣市]$/.test(String(props[k]))) || "COUNTYNAME";
         map.addSource("tw-county", { type: "geojson", data: gj });
@@ -326,22 +329,57 @@ export default function App() {
     m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Himawari_AHI_Band13_Clean_Infrared/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`], tileSize: 256, maxzoom: 6, attribution: "JMA Himawari-9 / NASA GIBS" });
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.82 } }, beforeId);
-    setGibsInfo(`即時雲圖　來源：向日葵九號(Himawari-9) 紅外雲圖 · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像，每10分鐘更新、約30–60分延遲)`);
+    setGibsInfo(`紅外雲圖　來源：向日葵九號(Himawari-9) 清晰紅外(Band13) · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像，每10分鐘更新、約30–60分延遲)`);
   }
-  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs") {
+  // 台灣是否日間(以太陽在台灣約 121E,23.5N 是否在地平線上概略判斷,決定衛星雲圖用可見光或紅外)
+  function twIsDay() {
+    const tw = new Date(Date.now() + 8 * 3600 * 1000);
+    const h = tw.getUTCHours() + tw.getUTCMinutes() / 60;
+    return h >= 6 && h < 18; // 台灣約 06–18 時為日間,可見光有影像
+  }
+  // 衛星雲圖：日間用向日葵可見光(Band3,真實視覺)、夜間自動改用紅外(Band13),讓任何時間都看得到雲系
+  function ensureVis() {
+    const m = mapRef.current; if (!m) return;
+    const day = twIsDay();
+    const layerName = day ? "Himawari_AHI_Band3_Red_Visible_1km" : "Himawari_AHI_Band13_Clean_Infrared";
+    const tms = day ? "GoogleMapsCompatible_Level7" : "GoogleMapsCompatible_Level6";
+    const mz = day ? 7 : 6;
+    const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/default/${tms}/{z}/{y}/{x}.png`;
+    if (!m.getLayer("vis-sat")) {
+      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: mz, attribution: "JMA Himawari-9 / NASA GIBS" });
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": day ? 1 : 0.82 } }, beforeId);
+      visModeRef.current = day ? "day" : "night";
+    } else if (visModeRef.current !== (day ? "day" : "night")) {
+      // 日夜狀態改變 → 重建來源
+      if (m.getLayer("vis-sat")) m.removeLayer("vis-sat");
+      if (m.getSource("vis-src")) m.removeSource("vis-src");
+      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: mz, attribution: "JMA Himawari-9 / NASA GIBS" });
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": day ? 1 : 0.82 } }, beforeId);
+      visModeRef.current = day ? "day" : "night";
+    }
+    setGibsInfo(day
+      ? `衛星雲圖　來源：向日葵九號(Himawari-9) 可見光真彩(Band3) · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，日間可見光實景，最新可用影像)`
+      : `衛星雲圖（夜間）　夜間無反射光,自動改用向日葵九號 紅外(Band13)顯示雲系 · NASA GIBS\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像)`);
+  }
+  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis") {
     const m = mapRef.current; if (!m) return;
     if (mode === "gibs") ensureGibs();
+    if (mode === "vis") ensureVis();
     const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
     vis("sat-layer", mode === "sat");
     vis("contour-line", mode === "topo");
     vis("contour-label", mode === "topo");
-    vis("hillshade", mode !== "sat" && mode !== "gibs"); // 衛星/空照本身已有實景，其餘用陰影做凸起
+    vis("hillshade", mode !== "sat" && mode !== "gibs" && mode !== "vis"); // 衛星/空照/雲圖本身已有實景，其餘用陰影做凸起
     vis("gibs-sat", mode === "gibs");
-    if (mode !== "gibs") setGibsInfo("");
+    vis("vis-sat", mode === "vis");
+    if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
+    else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
     setBasemap(mode);
   }
   function cycleBasemap() {
-    const order = ["dark", "topo", "sat", "gibs"] as const;
+    const order = ["dark", "topo", "sat", "gibs", "vis"] as const;
     applyBasemap(order[(order.indexOf(basemap as any) + 1) % order.length]);
   }
 
@@ -488,7 +526,7 @@ export default function App() {
         m.on("mouseleave", "ships-pt", () => { m.getCanvas().style.cursor = ""; });
       }
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
-      setShipsOn(true); setShipsInfo(d.count ? `中國籍船舶 ${d.count} 艘(近3小時)` : "尚無資料(收集器每10分鐘更新)");
+      setShipsOn(true); setShipsInfo(d.count ? `中國籍船舶 ${d.count} 艘(近7天)` : "尚無資料(收集器每5分鐘持續收集存檔)");
     } catch { setShipsInfo("船舶讀取失敗"); }
   }
   // 近 7 天航跡 + 異常標記(非同步載入，資料由收集器逐批累積)
@@ -536,15 +574,18 @@ export default function App() {
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
       m.addLayer({ id: "rivers-line", type: "line", source: "composite", "source-layer": "waterway", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4aa3df", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 11, 2], "line-opacity": 0.85 } }, beforeId);
       m.addLayer({ id: "rivers-hl", type: "line", source: "composite", "source-layer": "waterway", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 6], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
-      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name"]], "text-size": ["interpolate", ["linear"], ["zoom"], 8, 10, 13, 13], "text-allow-overlap": true, "text-ignore-placement": true, "symbol-spacing": 400 }, paint: { "text-color": "#cdeeff", "text-halo-color": "#06203f", "text-halo-width": 1.6 } });
+      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name_zh-Hans"], ["get", "name"]], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 13, 13], "text-allow-overlap": true, "text-ignore-placement": true, "symbol-spacing": 350 }, paint: { "text-color": "#cdeeff", "text-halo-color": "#06203f", "text-halo-width": 1.6 } });
+      const RIVER_NAME: any = ["coalesce", ["get", "name_zh-Hant"], ["get", "name_zh-Hans"], ["get", "name"]];
       m.on("mousemove", "rivers-line", (e) => {
-        const f = e.features?.[0]; if (!f) return; const nm = (f.properties as any)?.name; if (!nm) return;
-        // 只高亮該名稱指稱的河段(同名=完整流域；不同名的上下游不受影響)
-        m.setFilter("rivers-hl", ["==", ["get", "name"], nm]);
+        const f = e.features?.[0]; if (!f) return; const pr = (f.properties as any) || {};
+        const nm = pr["name_zh-Hant"] || pr["name_zh-Hans"] || pr.name; if (!nm) return;
+        // 高亮該名稱指稱的完整河段/整條同名河流(不同名的上下游支流不受影響)
+        m.setFilter("rivers-hl", ["==", RIVER_NAME, nm]);
+        m.getCanvas().style.cursor = "pointer";
         riverPopRef.current?.remove();
         riverPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat(e.lngLat).setText(nm).addTo(m);
       });
-      m.on("mouseleave", "rivers-line", () => { m.setFilter("rivers-hl", ["==", ["get", "name"], "___none___"]); riverPopRef.current?.remove(); });
+      m.on("mouseleave", "rivers-line", () => { m.setFilter("rivers-hl", ["==", RIVER_NAME, "___none___"]); m.getCanvas().style.cursor = ""; riverPopRef.current?.remove(); });
     }
     for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
     setRiversOn(true);
@@ -998,6 +1039,22 @@ export default function App() {
     let cv = oceanCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); oceanCanvasRef.current = cv; }
     const scale = 8; cv.width = nx * scale; cv.height = ny * scale; const ctx = cv.getContext("2d")!;
     ctx.clearRect(0, 0, cv.width, cv.height); ctx.imageSmoothingEnabled = true; ctx.filter = "blur(6px)"; ctx.drawImage(small, 0, 0, cv.width, cv.height); ctx.filter = "none";
+    // 依真實海岸線把陸地上的色彩精準挖掉(destination-out)，避免海溫遮罩覆蓋到陸地
+    const geo = countyGeoRef.current;
+    if (geo?.features) {
+      const toPx = (lon: number, lat: number): [number, number] => [((lon - x0) / (x1 - x0)) * cv!.width, ((y1 - lat) / (y1 - y0)) * cv!.height];
+      ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.fillStyle = "#000";
+      for (const f of geo.features) {
+        const g = f.geometry; if (!g) continue;
+        const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
+        for (const poly of polys) {
+          ctx.beginPath();
+          for (const ring of poly) ring.forEach((c: number[], k: number) => { const [px, py] = toPx(c[0], c[1]); if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+          ctx.closePath(); ctx.fill("evenodd");
+        }
+      }
+      ctx.restore();
+    }
     return { url: cv.toDataURL(), coords: [[x0, y1], [x1, y1], [x1, y0], [x0, y0]] as any };
   }
   async function toggleOcean() {
@@ -1263,7 +1320,7 @@ export default function App() {
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "即時雲圖" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星雲圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -1302,7 +1359,7 @@ export default function App() {
       </button>
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
-        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 即時雲圖(向日葵九號 Himawari-9 · NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖 → 衛星雲圖(向日葵九號 Himawari-9 · NASA GIBS，衛星雲圖日間可見光/夜間紅外)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
