@@ -48,6 +48,7 @@ export default function App() {
   const countyKeyRef = useRef<string>("COUNTYNAME");
   const hoverRef = useRef<mapboxgl.Popup | null>(null);
   const [visible, setVisible] = useState<Set<Cat>>(new Set());
+  const visibleRef = useRef<Set<Cat>>(visible);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showMemo, setShowMemo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
@@ -218,6 +219,17 @@ export default function App() {
             "line-opacity": ["interpolate", ["linear"], ["zoom"], 7, 0.3, 11, 0.55],
           },
         });
+        // 等高線數字標高：<1000m 每 200m、≥1000m 每 500m
+        map.addLayer({
+          id: "contour-label", type: "symbol", source: "tw-contour", "source-layer": "contour",
+          filter: ["case", ["<", ["get", "ele"], 1000], ["==", ["%", ["get", "ele"], 200], 0], ["==", ["%", ["get", "ele"], 500], 0]],
+          layout: {
+            visibility: "none", "symbol-placement": "line", "text-field": ["concat", ["to-string", ["get", "ele"]], " m"],
+            "text-size": ["interpolate", ["linear"], ["zoom"], 8, 9, 13, 12], "text-max-angle": 25,
+            "symbol-spacing": 350, "text-padding": 4,
+          },
+          paint: { "text-color": "#cfeee3", "text-halo-color": "#0d2621", "text-halo-width": 1.6 },
+        });
       } catch {}
 
       try {
@@ -232,6 +244,7 @@ export default function App() {
       map.addSource("intel", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: "intel-pts", type: "circle", source: "intel",
+        filter: ["in", ["get", "cat"], ["literal", Array.from(visibleRef.current)]],
         paint: {
           "circle-radius": ["case", ["==", ["get", "cat"], "report"], 6, 7],
           "circle-color": ["match", ["get", "cat"], "disaster", COLOR.disaster, "safety", COLOR.safety, "warning", COLOR.warning, "defense", COLOR.defense, "policy", COLOR.policy, "ecology", COLOR.ecology, "activity", COLOR.activity, "report", COLOR.report, "#888"],
@@ -268,6 +281,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    visibleRef.current = visible;
     const map = mapRef.current;
     if (!map || !map.getLayer("intel-pts")) return;
     map.setFilter("intel-pts", ["in", ["get", "cat"], ["literal", Array.from(visible)]]);
@@ -312,6 +326,7 @@ export default function App() {
     const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
     vis("sat-layer", mode === "sat");
     vis("contour-line", mode === "topo");
+    vis("contour-label", mode === "topo");
     vis("hillshade", mode !== "sat" && mode !== "gibs"); // 衛星/空照本身已有實景，其餘用陰影做凸起
     vis("gibs-sat", mode === "gibs");
     setBasemap(mode);
@@ -683,7 +698,7 @@ export default function App() {
         polyFeats.push({ type: "Feature", properties: { kind: "cur", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.cur] } });
         // 壩體往兩端延伸插入山壁(interleaved 會把山體內的部分遮掉)，使壩體貼緊兩側山壁封住谷口
         const dam = geom.dam as number[][];
-        const ddx = dam[1][0] - dam[0][0], ddy = dam[1][1] - dam[0][1], EXT = 1.7;
+        const ddx = dam[1][0] - dam[0][0], ddy = dam[1][1] - dam[0][1], EXT = 2.6;
         const damExt = [[dam[0][0] - ddx * EXT, dam[0][1] - ddy * EXT], [dam[1][0] + ddx * EXT, dam[1][1] + ddy * EXT]];
         damFeats.push({ type: "Feature", properties: { name: l.name, part: "toe" }, geometry: { type: "LineString", coordinates: damExt } });
         // 壩頂：往下游(東)平移一小段的平行線，表示壩體寬度與壩頂
@@ -890,17 +905,16 @@ export default function App() {
     if (m.getSource("ty-mask-src")) (m.getSource("ty-mask-src") as mapboxgl.GeoJSONSource).setData(fc);
     else { m.addSource("ty-mask-src", { type: "geojson", data: fc }); const before = m.getLayer("ty-cone") ? "ty-cone" : undefined; m.addLayer({ id: "ty-mask", type: "fill", source: "ty-mask-src", paint: { "fill-color": "#04070e", "fill-opacity": 0.88 } }, before); }
   }
-  // 颱風循環：關 → 颱風(無空照) → 颱風+去背空照(只露颱風雲系)
+  // 颱風開關：關 → 颱風路徑(CWA 官方即時路徑)
+  // 註:去背空照模式已移除 — NASA GIBS 為每日一張的靜態影像,無法與即時移動的颱風中心對位。
   async function cycleTyphoon() {
     const m = mapRef.current; if (!m) return;
-    const next = (typhoonModeRef.current + 1) % 3;
+    const next = (typhoonModeRef.current + 1) % 2;
     typhoonModeRef.current = next; setTyphoonMode(next);
     const mask = (show: boolean) => { if (m.getLayer("ty-mask")) m.setLayoutProperty("ty-mask", "visibility", show ? "visible" : "none"); };
     if (next === 0) { if (typhoonOn) await toggleTyphoon(); mask(false); applyBasemap("dark"); return; }
     if (!typhoonOn) await toggleTyphoon();
-    if (!typhoonCenterRef.current) { mask(false); return; } // 無活動颱風
-    if (next === 1) { applyBasemap("dark"); mask(false); }
-    else { applyBasemap("gibs"); buildTyMask(m); mask(true); }
+    applyBasemap("dark"); mask(false);
   }
   async function toggleTyphoon() {
     const m = mapRef.current; if (!m) return;
@@ -1276,13 +1290,13 @@ export default function App() {
         {menuOpen ? "✕ 圖層" : "☰ 圖層"}
       </button>
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
-        <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">消息 {newsOpen ? "◂" : "▸"}</button>
+        <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
         <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 最新空照(NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
         <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)">測站</button>
-        <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風循環：關 → 颱風路徑 → 颱風+去背空照">{typhoonMode === 0 ? "颱風" : typhoonMode === 1 ? "颱風：路徑" : "颱風：去背空照"}</button>
+        <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風：CWA 官方即時路徑(過去/現在/預報 + 暴風圈)">{typhoonMode === 0 ? "颱風" : "颱風：路徑"}</button>
         <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
         <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環：關 → 河流線+河名 → 河流+即時水位高度">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
         <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS + 近7天航跡">中國船</button>

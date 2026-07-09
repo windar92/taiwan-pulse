@@ -207,8 +207,8 @@ body,
 .sta-btn:hover { filter: brightness(1.05); }
 .sta-panel {
   position: absolute;
-  top: 110px;
-  left: 10px;
+  top: 367px;
+  right: 120px;
   z-index: 4;
   display: flex;
   flex-direction: column;
@@ -231,8 +231,8 @@ body,
 .sta-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
 .peak-panel {
   position: absolute;
-  top: 110px;
-  left: 10px;
+  top: 522px;
+  right: 120px;
   z-index: 4;
   display: flex;
   flex-direction: column;
@@ -246,7 +246,7 @@ body,
 .peak-panel .sta-opt { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #e7ecf3; white-space: nowrap; cursor: pointer; }
 .peak-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
 .seg-panel {
-  position: absolute; top: 110px; left: 176px; z-index: 4;
+  position: absolute; top: 274px; right: 120px; z-index: 4;
   display: flex; gap: 4px; background: rgba(11, 14, 19, 0.88);
   border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px;
   padding: 5px; backdrop-filter: blur(6px);
@@ -440,8 +440,8 @@ body,
 }
 .gz-ctrl {
   position: absolute;
-  bottom: 46px;
-  left: 10px;
+  bottom: 20px;
+  right: 120px;
   z-index: 4;
   width: 300px;
   background: rgba(20, 6, 6, 0.9);
@@ -492,8 +492,9 @@ body,
 }
 .layer-menu::-webkit-scrollbar { width: 6px; }
 .layer-menu::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 3px; }
-.news-btn { background: #fff !important; color: #222; }
+.news-btn { border: none; border-radius: 5px; background: #fff !important; color: #222; font-size: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); }
 .news-btn.on { background: #37474f !important; color: #fff; }
+.news-btn:hover { filter: brightness(1.05); }
 .news-panel {
   position: absolute; top: 206px; right: 120px; z-index: 5;
   display: flex; flex-direction: column; gap: 4px;
