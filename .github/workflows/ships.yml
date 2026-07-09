@@ -1,7 +1,7 @@
 name: ships-collect
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 jobs:
   collect:
@@ -9,4 +9,4 @@ jobs:
     steps:
       - name: trigger AIS collector
         run: |
-          curl -sS -X POST "https://taiwan-pulse-five.vercel.app/api/ships-collect" --max-time 75 || true
+          curl -sS -X POST "https://taiwan-pulse-five.vercel.app/api/ships-collect?ms=55000" --max-time 75 || true
