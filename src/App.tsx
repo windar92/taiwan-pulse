@@ -575,8 +575,22 @@ export default function App() {
       if (cached) { const o = JSON.parse(cached); if (o.t && Date.now() - o.t < 14 * 86400000 && o.geo?.features?.length) { riversGeoRef.current = o.geo; return o.geo; } }
     } catch {}
     const query = `[out:json][timeout:90];way["waterway"~"^(river|canal)$"]["name"](21.85,119.9,25.45,122.15);out geom;`;
-    const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(query) });
-    const j = await res.json();
+    const endpoints = [
+      "https://overpass.kumi.systems/api/interpreter",
+      "https://overpass-api.de/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+    ];
+    let j: any = null;
+    for (const ep of endpoints) {
+      try {
+        const res = await fetch(ep, { method: "POST", body: "data=" + encodeURIComponent(query) });
+        if (!res.ok) continue;
+        j = await res.json();
+        if (j?.elements?.length) break;
+      } catch {}
+    }
+    if (!j?.elements?.length) throw new Error("all overpass endpoints failed");
     const features = (j.elements || []).filter((e: any) => e.type === "way" && e.geometry?.length > 1).map((e: any) => ({
       type: "Feature",
       properties: { name: e.tags?.["name:zh"] || e.tags?.name || "" },
