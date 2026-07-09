@@ -52,6 +52,7 @@ export default function App() {
   const [showMemo, setShowMemo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
   const [newsOpen, setNewsOpen] = useState(true);
+  const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs">("dark");
   const [satOn, setSatOn] = useState(false);
@@ -79,11 +80,16 @@ export default function App() {
   const [staTypes, setStaTypes] = useState<Set<string>>(new Set(["weather", "rain", "quake"]));
   const staPopRef = useRef<mapboxgl.Popup | null>(null);
   const [typhoonOn, setTyphoonOn] = useState(false);
+  const [typhoonMode, setTyphoonMode] = useState(0);
+  const typhoonModeRef = useRef(0);
+  const typhoonCenterRef = useRef<[number, number] | null>(null);
   const [typhoonInfo, setTyphoonInfo] = useState<string>("");
   const [oceanOn, setOceanOn] = useState(false);
   const [oceanInfo, setOceanInfo] = useState<string>("");
   const [riversOn, setRiversOn] = useState(false);
   const riverPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [riverMode, setRiverMode] = useState(0);
+  const riverModeRef = useRef(0);
   const [shipsOn, setShipsOn] = useState(false);
   const [shipsInfo, setShipsInfo] = useState<string>("");
   const shipPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -296,7 +302,7 @@ export default function App() {
     const m = mapRef.current; if (!m || m.getLayer("gibs-sat")) return;
     const d = new Date(Date.now() - 24 * 3600 * 1000);
     const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
+    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.9 } }, beforeId);
   }
@@ -506,9 +512,10 @@ export default function App() {
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
       m.addLayer({ id: "rivers-line", type: "line", source: "composite", "source-layer": "waterway", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4aa3df", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 11, 2], "line-opacity": 0.85 } }, beforeId);
       m.addLayer({ id: "rivers-hl", type: "line", source: "composite", "source-layer": "waterway", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 6], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
-      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name"]], "text-size": 11, "text-allow-overlap": false }, paint: { "text-color": "#bfe9ff", "text-halo-color": "#06203f", "text-halo-width": 1.4 } });
+      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name"]], "text-size": ["interpolate", ["linear"], ["zoom"], 8, 10, 13, 13], "text-allow-overlap": true, "text-ignore-placement": true, "symbol-spacing": 400 }, paint: { "text-color": "#cdeeff", "text-halo-color": "#06203f", "text-halo-width": 1.6 } });
       m.on("mousemove", "rivers-line", (e) => {
         const f = e.features?.[0]; if (!f) return; const nm = (f.properties as any)?.name; if (!nm) return;
+        // 只高亮該名稱指稱的河段(同名=完整流域；不同名的上下游不受影響)
         m.setFilter("rivers-hl", ["==", ["get", "name"], nm]);
         riverPopRef.current?.remove();
         riverPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat(e.lngLat).setText(nm).addTo(m);
@@ -518,6 +525,24 @@ export default function App() {
     for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
     setRiversOn(true);
   }
+  // 河流循環：關 → 河流 → 河流+即時水位高度(跟底圖同邏輯)
+  function cycleRiver() {
+    const next = (riverModeRef.current + 1) % 3;
+    riverModeRef.current = next; setRiverMode(next);
+    const wantRivers = next >= 1, wantWall = next === 2;
+    if (wantRivers !== riversOn) toggleRivers();
+    if (wantWall !== wallOn) toggleWaterWall();
+  }
+  // 一鍵開/關所有圖層
+  function toggleAllLayers() {
+    const on = !allLayersOn; setAllLayersOn(on);
+    const w = (cur: boolean, fn: () => void) => { if (cur !== on) fn(); };
+    w(rainOn, toggleRain); w(quakeOn, toggleQuake); w(tempOn, toggleTemp); w(staOn, toggleSta);
+    w(typhoonOn, toggleTyphoon); w(oceanOn, toggleOcean); w(shipsOn, toggleShips);
+    w(peaksOn, togglePeaks); w(lakeOn, toggleLake); w(gzOn, toggleGrayZone);
+    if (on && riverModeRef.current === 0) cycleRiver();
+    if (!on && riverModeRef.current > 0) { if (wallOn) toggleWaterWall(); if (riversOn) toggleRivers(); riverModeRef.current = 0; setRiverMode(0); }
+  }
   // ===== 衛星空照(NASA GIBS 每日近即時真彩) =====
   function toggleSat() {
     const m = mapRef.current; if (!m) return;
@@ -526,7 +551,7 @@ export default function App() {
     if (!m.getLayer("gibs-sat")) {
       const d = new Date(Date.now() - 24 * 3600 * 1000); // 取昨日(當日常未處理完)
       const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-      m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/MODIS_Terra_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
+      m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
       m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.85 } }, beforeId);
     }
@@ -617,7 +642,7 @@ export default function App() {
   async function toggleLake() {
     const m = mapRef.current; if (!m) return;
     const on = !lakeOn;
-    const ids = ["lake-max-fill", "lake-max-line", "lake-cur-fill", "lake-dam", "lake-ring", "lake-pt", "lake-label"];
+    const ids = ["lake-max-fill", "lake-max-line", "lake-cur-fill", "lake-damband", "lake-dam", "lake-damtop", "lake-ring", "lake-pt", "lake-label"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); lakePopRef.current?.remove(); setLakeOn(false); setLakeInfo(""); return; }
     try {
       const d = await fetch("/api/live?ds=barrierlake&t=" + Date.now()).then((r) => r.json());
@@ -654,7 +679,11 @@ export default function App() {
         if (!g) continue; const geom = LAKE_GEOM[g];
         polyFeats.push({ type: "Feature", properties: { kind: "max", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.max] } });
         polyFeats.push({ type: "Feature", properties: { kind: "cur", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.cur] } });
-        damFeats.push({ type: "Feature", properties: { name: l.name }, geometry: { type: "LineString", coordinates: geom.dam } });
+        damFeats.push({ type: "Feature", properties: { name: l.name, part: "toe" }, geometry: { type: "LineString", coordinates: geom.dam } });
+        // 壩頂：往下游(東)平移一小段的平行線，表示壩體寬度與壩頂
+        const crest = (geom.dam as number[][]).map((c) => [c[0] + 0.0007, c[1]]);
+        damFeats.push({ type: "Feature", properties: { name: l.name, part: "crest" }, geometry: { type: "LineString", coordinates: crest } });
+        damFeats.push({ type: "Feature", properties: { name: l.name, part: "body" }, geometry: { type: "Polygon", coordinates: [[...(geom.dam as number[][]), ...crest.slice().reverse(), geom.dam[0]]] } });
       }
       const polyFc = { type: "FeatureCollection", features: polyFeats } as any;
       const damFc = { type: "FeatureCollection", features: damFeats } as any;
@@ -662,10 +691,12 @@ export default function App() {
       else if (polyFeats.length) {
         m.addSource("lake-poly-src", { type: "geojson", data: polyFc });
         m.addSource("lake-dam-src", { type: "geojson", data: damFc });
-        m.addLayer({ id: "lake-max-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "fill-color": "#4a90d9", "fill-opacity": 0.28 } });
-        m.addLayer({ id: "lake-max-line", type: "line", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "line-color": "#7fb2e5", "line-width": 1, "line-dasharray": [2, 1.5], "line-opacity": 0.8 } });
-        m.addLayer({ id: "lake-cur-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "cur"], paint: { "fill-color": "#0b3d91", "fill-opacity": 0.62 } });
-        m.addLayer({ id: "lake-dam", type: "line", source: "lake-dam-src", paint: { "line-color": "#c62828", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 6], "line-opacity": 0.9 } });
+        m.addLayer({ id: "lake-max-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "fill-color": "#2f6fd6", "fill-opacity": 0.5 } });
+        m.addLayer({ id: "lake-max-line", type: "line", source: "lake-poly-src", filter: ["==", ["get", "kind"], "max"], paint: { "line-color": "#9fd0ff", "line-width": 1.2, "line-dasharray": [2, 1.5], "line-opacity": 0.85 } });
+        m.addLayer({ id: "lake-cur-fill", type: "fill", source: "lake-poly-src", filter: ["==", ["get", "kind"], "cur"], paint: { "fill-color": "#0a337e", "fill-opacity": 0.9 } });
+        m.addLayer({ id: "lake-damband", type: "fill", source: "lake-dam-src", filter: ["==", ["get", "part"], "body"], paint: { "fill-color": "#6d4c41", "fill-opacity": 0.85 } });
+        m.addLayer({ id: "lake-dam", type: "line", source: "lake-dam-src", filter: ["==", ["get", "part"], "toe"], paint: { "line-color": "#c62828", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 5], "line-opacity": 0.95 } });
+        m.addLayer({ id: "lake-damtop", type: "line", source: "lake-dam-src", filter: ["==", ["get", "part"], "crest"], paint: { "line-color": "#ffe0b2", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 2, 14, 5], "line-opacity": 0.95 } });
         m.on("click", "lake-max-fill", (e) => { const p = e.features?.[0]?.properties as any; if (!p) return; lakePopRef.current?.remove(); lakePopRef.current = new mapboxgl.Popup({ offset: 6, className: "hover-tip", maxWidth: "300px" }).setLngLat(e.lngLat).setHTML(`<div class="qpop"><b>${p.name}</b><br/><span style="opacity:.88">${p.desc}</span></div>`).addTo(m); });
         m.on("mouseenter", "lake-max-fill", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "lake-max-fill", () => { m.getCanvas().style.cursor = ""; });
@@ -834,17 +865,38 @@ export default function App() {
     pts.push(pts[0]); return pts;
   }
   function setSrc(id: string, data: any) { const m = mapRef.current!; const s = m.getSource(id) as mapboxgl.GeoJSONSource; if (s) s.setData(data); else m.addSource(id, { type: "geojson", data }); }
+  // 颱風去背遮罩：整片壓暗、只留颱風中心一個圓(環流)透出即時空照雲系
+  function buildTyMask(m: mapboxgl.Map) {
+    const c = typhoonCenterRef.current; if (!c) return;
+    const R = 4.2; const hole: number[][] = [];
+    for (let i = 0; i <= 48; i++) { const a = i / 48 * 2 * Math.PI; hole.push([c[0] + R * Math.cos(a) / Math.max(0.3, Math.cos(c[1] * Math.PI / 180)), c[1] + R * Math.sin(a)]); }
+    const outer = [[-179, -80], [179, -80], [179, 80], [-179, 80], [-179, -80]];
+    const fc = { type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: [outer, hole] } }] } as any;
+    if (m.getSource("ty-mask-src")) (m.getSource("ty-mask-src") as mapboxgl.GeoJSONSource).setData(fc);
+    else { m.addSource("ty-mask-src", { type: "geojson", data: fc }); const before = m.getLayer("ty-cone") ? "ty-cone" : undefined; m.addLayer({ id: "ty-mask", type: "fill", source: "ty-mask-src", paint: { "fill-color": "#04070e", "fill-opacity": 0.88 } }, before); }
+  }
+  // 颱風循環：關 → 颱風(無空照) → 颱風+去背空照(只露颱風雲系)
+  async function cycleTyphoon() {
+    const m = mapRef.current; if (!m) return;
+    const next = (typhoonModeRef.current + 1) % 3;
+    typhoonModeRef.current = next; setTyphoonMode(next);
+    const mask = (show: boolean) => { if (m.getLayer("ty-mask")) m.setLayoutProperty("ty-mask", "visibility", show ? "visible" : "none"); };
+    if (next === 0) { if (typhoonOn) await toggleTyphoon(); mask(false); applyBasemap("dark"); return; }
+    if (!typhoonOn) await toggleTyphoon();
+    if (!typhoonCenterRef.current) { mask(false); return; } // 無活動颱風
+    if (next === 1) { applyBasemap("dark"); mask(false); }
+    else { applyBasemap("gibs"); buildTyMask(m); mask(true); }
+  }
   async function toggleTyphoon() {
     const m = mapRef.current; if (!m) return;
     const on = !typhoonOn;
     const ids = ["ty-cone", "ty-wind", "ty-path", "ty-fcst", "ty-pt", "ty-ptlbl", "ty-center"];
-    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setTyphoonOn(false); setTyphoonInfo(""); return; }
+    if (!on) { for (const id of [...ids, "ty-mask"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setTyphoonOn(false); setTyphoonInfo(""); return; }
     try {
       const d = await fetch("/api/typhoon").then((r) => r.json());
       if (!d.ok) { setTyphoonInfo("颱風讀取失敗"); return; }
       const tys = d.typhoons || [];
       if (!tys.length) { setTyphoonInfo("目前西北太平洋無活動颱風"); return; }
-      applyBasemap("gibs"); // 颱風時切到即時空照，看得到雲系結構
       const lineF: any[] = [], coneF: any[] = [], windF: any[] = [], centerF: any[] = [], ptF: any[] = [];
       const fmtT = (iso: string) => { const d = new Date(iso); if (isNaN(d.getTime())) return ""; try { return new Intl.DateTimeFormat("zh-TW", { timeZone: "Asia/Taipei", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).format(d); } catch { return ""; } };
       for (const t of tys) {
@@ -880,6 +932,7 @@ export default function App() {
         m.addLayer({ id: "ty-center", type: "symbol", source: "ty-center-src", layout: { "text-field": "🌀", "text-size": 30, "text-allow-overlap": true } });
       }
       for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+      typhoonCenterRef.current = centerF[0] ? (centerF[0].geometry.coordinates as [number, number]) : null;
       setTyphoonOn(true); setTyphoonInfo(`颱風:${tys.map((t: any) => t.name).filter(Boolean).join("、")}`);
     } catch { setTyphoonInfo("颱風讀取失敗"); }
   }
@@ -1170,7 +1223,7 @@ export default function App() {
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
   }
-  const BASEMAP_LABEL = { dark: "深色", topo: "地形", sat: "衛星", gibs: "空照" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "最新空照" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -1203,24 +1256,13 @@ export default function App() {
         <button className="ctr-btn" onClick={recenter} title="回到我的置中位置">⌖</button>
       </div>
 
+      <button className={"all-layers-btn" + (allLayersOn ? " on" : "")} onClick={toggleAllLayers} title="一鍵顯示/關閉所有圖層">{allLayersOn ? "全部 ✓" : "全部"}</button>
       <button className="layer-toggle" onClick={() => setMenuOpen((o) => !o)} title="圖層選單：開關各資料圖層">
         {menuOpen ? "✕ 圖層" : "☰ 圖層"}
       </button>
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
-        <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)">消息 {newsOpen ? "▴" : "▾"}</button>
-        {newsOpen && (
-          <div className="news-cats">
-            {CATS.map((c) => (
-              <button key={c.id} className={"news-chip" + (visible.has(c.id) ? "" : " off")} onClick={() => toggle(c.id)}>
-                <span className="dot" style={{ background: c.color }} />{c.label}<span className="cnt">{counts[c.id] || 0}</span>
-              </button>
-            ))}
-            <button className="news-chip" onClick={() => setVisible(allOn ? new Set() : new Set(CATS.map((c) => c.id)))}>
-              <span className="dot" style={{ background: "#ffffff", opacity: allOn ? 1 : 0.25 }} />全選
-            </button>
-          </div>
-        )}
-        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：深色 → 地形(等高線) → 衛星 → 即時空照(NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">消息 {newsOpen ? "◂" : "▸"}</button>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 最新空照(NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱(近1小時雨量)">雨量</button>
         {rainInfo && <div className="rain-info">{rainInfo}</div>}
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期顯著有感地震：震央 + 不規則震度擴散範圍">地震</button>
@@ -1228,12 +1270,11 @@ export default function App() {
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱(藍冷紅熱，20°C 為中點)">氣溫</button>
         {tempInfo && <div className="temp-info">{tempInfo}</div>}
         <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)，點站看最新數據">測站</button>
-        <button className={"ty-btn" + (typhoonOn ? " on" : "")} onClick={toggleTyphoon} title="颱風路徑、暴風圈與預報警戒圈">颱風</button>
+        <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風循環：關 → 颱風路徑/暴風圈 → 颱風+去背空照(只露颱風雲系)">{typhoonMode === 0 ? "颱風" : typhoonMode === 1 ? "颱風：路徑" : "颱風：去背空照"}</button>
         {typhoonInfo && <div className="ty-info">{typhoonInfo}</div>}
         <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
         {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
-        <button className={"river-btn" + (riversOn ? " on" : "")} onClick={toggleRivers} title="溪流河川:常態畫線+河名，滑過高亮整條">河流</button>
-        <button className={"wall-btn" + (wallOn ? " on" : "")} onClick={toggleWaterWall} title="河川即時水位高度(併入河流)：藍=平均水量、泥=即時超出平均，滑過站點看數值與時間">└ 即時水位高度</button>
+        <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環(跟底圖同邏輯)：關 → 河流線+河名 → 河流+即時水位高度(滑過站點看水量高度與時間)">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
         {wallInfo && <div className="wall-info">{wallInfo}</div>}
         <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">中國船</button>
         {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
@@ -1244,6 +1285,18 @@ export default function App() {
         <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度">中國入侵</button>
         {gzInfo && <div className="gz-info">{gzInfo}</div>}
       </div>
+      {newsOpen && (
+        <div className="news-panel">
+          {CATS.map((c) => (
+            <button key={c.id} className={"news-chip" + (visible.has(c.id) ? "" : " off")} onClick={() => toggle(c.id)}>
+              <span className="dot" style={{ background: c.color }} />{c.label}<span className="cnt">{counts[c.id] || 0}</span>
+            </button>
+          ))}
+          <button className="news-chip" onClick={() => setVisible(allOn ? new Set() : new Set(CATS.map((c) => c.id)))}>
+            <span className="dot" style={{ background: "#ffffff", opacity: allOn ? 1 : 0.25 }} />全選
+          </button>
+        </div>
+      )}
       {staOn && (
         <div className="sta-panel">
           {([["weather", "氣象站", "#E69F00"], ["rain", "雨量站", "#0072B2"], ["quake", "地震站", "#009E73"]] as const).map(([k, label, c]) => (
