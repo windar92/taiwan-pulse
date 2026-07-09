@@ -56,6 +56,7 @@ export default function App() {
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs">("dark");
+  const [gibsInfo, setGibsInfo] = useState<string>("");
   const [satOn, setSatOn] = useState(false);
   const [sel, setSel] = useState<Sel | null>(null);
   const [expanded, setExpanded] = useState(false);
@@ -312,13 +313,23 @@ export default function App() {
 
   function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
   function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
+  // 即時雲圖：日本向日葵九號(Himawari-9) AHI Band13 清晰紅外(每10分鐘)，經 NASA GIBS 重投影為 web 墨卡托
+  function himawariTime() {
+    // GIBS 對 Himawari 約有 30–50 分延遲，取 50 分緩衝並向下取整到 10 分,確保圖磚存在
+    const d = new Date(Date.now() - 50 * 60 * 1000);
+    d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
+    const iso = d.toISOString().replace(/\.\d+Z$/, "Z");
+    const tw = new Date(d.getTime() + 8 * 3600 * 1000); // 台灣時間 UTC+8
+    const label = `${tw.getUTCMonth() + 1}/${tw.getUTCDate()} ${String(tw.getUTCHours()).padStart(2, "0")}:${String(tw.getUTCMinutes()).padStart(2, "0")}`;
+    return { iso, label };
+  }
   function ensureGibs() {
     const m = mapRef.current; if (!m || m.getLayer("gibs-sat")) return;
-    const d = new Date(Date.now() - 24 * 3600 * 1000);
-    const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS" });
+    const t = himawariTime();
+    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Himawari_AHI_Band13_Clean_Infrared/default/${t.iso}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`], tileSize: 256, maxzoom: 6, attribution: "JMA Himawari-9 / NASA GIBS" });
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-    m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.9 } }, beforeId);
+    m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.82 } }, beforeId);
+    setGibsInfo(`即時雲圖　來源：向日葵九號(Himawari-9) 紅外雲圖 · NASA GIBS 重投影\n資料時間：${t.label}(台灣時間，每10分鐘更新，約50分延遲)`);
   }
   function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs") {
     const m = mapRef.current; if (!m) return;
@@ -329,6 +340,7 @@ export default function App() {
     vis("contour-label", mode === "topo");
     vis("hillshade", mode !== "sat" && mode !== "gibs"); // 衛星/空照本身已有實景，其餘用陰影做凸起
     vis("gibs-sat", mode === "gibs");
+    if (mode !== "gibs") setGibsInfo("");
     setBasemap(mode);
   }
   function cycleBasemap() {
@@ -640,6 +652,7 @@ export default function App() {
       // 目前範圍 ~12.6 公頃(2025/10/23，水面約 988m，官方約 1010m)
       cur: [[121.2956,23.7005],[121.2955,23.7001],[121.2955,23.6997],[121.2953,23.6992],[121.2952,23.6987],[121.295,23.6983],[121.2949,23.6978],[121.2944,23.6976],[121.2939,23.6977],[121.2934,23.6977],[121.2929,23.6977],[121.2924,23.6975],[121.2918,23.6972],[121.2913,23.6968],[121.2908,23.6964],[121.2903,23.6963],[121.2898,23.6962],[121.2894,23.6963],[121.2896,23.6968],[121.29,23.6972],[121.2904,23.6977],[121.2908,23.6982],[121.2912,23.6987],[121.2916,23.699],[121.2921,23.699],[121.2926,23.6994],[121.2931,23.6993],[121.2936,23.6995],[121.2941,23.6998],[121.2946,23.7001],[121.2951,23.7005],[121.2956,23.7005],[121.2956,23.7005]],
       dam: [[121.295,23.6978],[121.296,23.7011]],
+      damExt: 1.9,
       level: 1104, crest: 1120,
       desc: "馬太鞍溪堰塞湖(花蓮萬榮)：2025/7 颱風誘發崩塌形成，9/4 滿水位約 1110m、湖面最大約 59.7 公頃、壩前水深逾 200m；9 月溢流致光復重災，10/23 縮至約 12.6 公頃。深藍=目前殘留湖面，淺藍=最大淹沒範圍，紅線=崩塌壩體。範圍由 30m DEM 淹沒推估(反算水位與官方吻合)。",
     },
@@ -647,6 +660,7 @@ export default function App() {
       max: [[121.3444,23.8555],[121.3455,23.8551],[121.346,23.8542],[121.3467,23.8536],[121.347,23.853],[121.347,23.852],[121.347,23.8511],[121.347,23.8501],[121.347,23.8492],[121.3463,23.8498],[121.3453,23.8508],[121.3443,23.8511],[121.3432,23.8504],[121.3422,23.8501],[121.3415,23.8492],[121.3405,23.8486],[121.3394,23.8486],[121.3386,23.849],[121.3379,23.8498],[121.3377,23.8508],[121.3386,23.8512],[121.3394,23.852],[121.3401,23.853],[121.341,23.8536],[121.342,23.8542],[121.3431,23.8547],[121.3439,23.8551],[121.3444,23.8555]],
       cur: [[121.3444,23.8555],[121.3455,23.8551],[121.346,23.8542],[121.3467,23.8536],[121.347,23.853],[121.347,23.852],[121.347,23.8511],[121.347,23.8501],[121.347,23.8492],[121.3463,23.8498],[121.3453,23.8508],[121.3443,23.8511],[121.3432,23.8504],[121.3422,23.8501],[121.3415,23.8492],[121.3405,23.8486],[121.3394,23.8486],[121.3386,23.849],[121.3379,23.8498],[121.3377,23.8508],[121.3386,23.8512],[121.3394,23.852],[121.3401,23.853],[121.341,23.8536],[121.342,23.8542],[121.3431,23.8547],[121.3439,23.8551],[121.3444,23.8555]],
       dam: [[121.3477,23.8488],[121.3477,23.8558]],
+      damExt: 0.2,
       level: 1066, crest: 1086,
       desc: "萬里溪堰塞湖(花蓮萬榮，2026/6 形成)：位萬里溪上游林田山 96/82 林班交界、距七彩湖約 7km。壩高約 114m、溢流口 1086m、目前水位約 1066.4m；崩塌約 45 公頃、最大蓄水約 510 萬 m³，推估約 7/12 滿水位。範圍由 30m DEM 淹沒至官方水面高程 1066m 推得(面積約 44 公頃與官方約 45 公頃吻合)。紅線=崩塌壩體。",
     },
@@ -698,7 +712,7 @@ export default function App() {
         polyFeats.push({ type: "Feature", properties: { kind: "cur", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.cur] } });
         // 壩體往兩端延伸插入山壁(interleaved 會把山體內的部分遮掉)，使壩體貼緊兩側山壁封住谷口
         const dam = geom.dam as number[][];
-        const ddx = dam[1][0] - dam[0][0], ddy = dam[1][1] - dam[0][1], EXT = 2.6;
+        const ddx = dam[1][0] - dam[0][0], ddy = dam[1][1] - dam[0][1], EXT = (geom.damExt ?? 1.7);
         const damExt = [[dam[0][0] - ddx * EXT, dam[0][1] - ddy * EXT], [dam[1][0] + ddx * EXT, dam[1][1] + ddy * EXT]];
         damFeats.push({ type: "Feature", properties: { name: l.name, part: "toe" }, geometry: { type: "LineString", coordinates: damExt } });
         // 壩頂：往下游(東)平移一小段的平行線，表示壩體寬度與壩頂
@@ -1252,7 +1266,7 @@ export default function App() {
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "最新空照" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "即時雲圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -1291,7 +1305,7 @@ export default function App() {
       </button>
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
-        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 最新空照(NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 即時雲圖(向日葵九號 Himawari-9 · NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
@@ -1305,6 +1319,7 @@ export default function App() {
         <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
       </div>
       <div className="layer-info-col">
+        {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
         {rainInfo && <div className="li">{rainInfo}</div>}
         {quakeInfo && <div className="li">{quakeInfo}</div>}
         {tempInfo && <div className="li">{tempInfo}</div>}
