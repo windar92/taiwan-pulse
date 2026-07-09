@@ -87,18 +87,19 @@ async function quake(key) {
   };
   const all = [];
   for (const id of ["E-A0015-001", "E-A0016-001"]) {
+    const kind = id === "E-A0015-001" ? "顯著" : "小區域";
     try {
-      const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/${id}?Authorization=${key}&format=JSON&limit=50`;
+      const url = `https://opendata.cwa.gov.tw/api/v1/rest/datastore/${id}?Authorization=${key}&format=JSON&limit=200`;
       const r = await fetch(url, { headers: UA });
       if (!r.ok) continue;
       const j = await r.json();
-      for (const e of (j?.records?.Earthquake || [])) all.push(mapEq(e));
+      for (const e of (j?.records?.Earthquake || [])) all.push({ ...mapEq(e), kind });
     } catch {}
   }
   all.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
   const seen = new Set(), uniq = [];
-  for (const q of all) { if (typeof q.lat !== "number" || typeof q.lon !== "number") continue; const k = String(q.time); if (seen.has(k)) continue; seen.add(k); uniq.push(q); }
-  return { ok: true, count: uniq.length, quakes: uniq.slice(0, 40) };
+  for (const q of all) { if (typeof q.lat !== "number" || typeof q.lon !== "number") continue; const k = String(q.time) + "|" + String(q.lat) + "," + String(q.lon); if (seen.has(k)) continue; seen.add(k); uniq.push(q); }
+  return { ok: true, count: uniq.length, quakes: uniq.slice(0, 150) };
 }
 
 // ---- 海溫 台大 ODB ----
