@@ -314,22 +314,19 @@ export default function App() {
   function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
   function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
   // 即時雲圖：日本向日葵九號(Himawari-9) AHI Band13 清晰紅外(每10分鐘)，經 NASA GIBS 重投影為 web 墨卡托
+  // 圖磚用 GIBS "default"(永遠取最新可用影像,不會空白);顯示時間為推估的最新可用時刻(GIBS 延遲約 30–60 分)
   function himawariTime() {
-    // GIBS 對 Himawari 約有 30–50 分延遲，取 50 分緩衝並向下取整到 10 分,確保圖磚存在
-    const d = new Date(Date.now() - 50 * 60 * 1000);
+    const d = new Date(Date.now() - 40 * 60 * 1000);
     d.setUTCMinutes(Math.floor(d.getUTCMinutes() / 10) * 10, 0, 0);
-    const iso = d.toISOString().replace(/\.\d+Z$/, "Z");
     const tw = new Date(d.getTime() + 8 * 3600 * 1000); // 台灣時間 UTC+8
-    const label = `${tw.getUTCMonth() + 1}/${tw.getUTCDate()} ${String(tw.getUTCHours()).padStart(2, "0")}:${String(tw.getUTCMinutes()).padStart(2, "0")}`;
-    return { iso, label };
+    return `${tw.getUTCMonth() + 1}/${tw.getUTCDate()} ${String(tw.getUTCHours()).padStart(2, "0")}:${String(tw.getUTCMinutes()).padStart(2, "0")}`;
   }
   function ensureGibs() {
     const m = mapRef.current; if (!m || m.getLayer("gibs-sat")) return;
-    const t = himawariTime();
-    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Himawari_AHI_Band13_Clean_Infrared/default/${t.iso}/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`], tileSize: 256, maxzoom: 6, attribution: "JMA Himawari-9 / NASA GIBS" });
+    m.addSource("gibs-sat", { type: "raster", tiles: [`https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/Himawari_AHI_Band13_Clean_Infrared/default/default/GoogleMapsCompatible_Level6/{z}/{y}/{x}.png`], tileSize: 256, maxzoom: 6, attribution: "JMA Himawari-9 / NASA GIBS" });
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.82 } }, beforeId);
-    setGibsInfo(`即時雲圖　來源：向日葵九號(Himawari-9) 紅外雲圖 · NASA GIBS 重投影\n資料時間：${t.label}(台灣時間，每10分鐘更新，約50分延遲)`);
+    setGibsInfo(`即時雲圖　來源：向日葵九號(Himawari-9) 紅外雲圖 · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像，每10分鐘更新、約30–60分延遲)`);
   }
   function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs") {
     const m = mapRef.current; if (!m) return;
