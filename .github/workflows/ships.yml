@@ -7,6 +7,9 @@ jobs:
   collect:
     runs-on: ubuntu-latest
     steps:
-      - name: trigger AIS collector
+      - name: trigger AIS collector (loop ~5 min for near-continuous collection)
         run: |
-          curl -sS -X POST "https://taiwan-pulse-five.vercel.app/api/ships-collect?ms=55000" --max-time 75 || true
+          for i in 1 2 3 4 5; do
+            curl -sS -X POST "https://taiwan-pulse-five.vercel.app/api/ships-collect?ms=55000" --max-time 75 || true
+            sleep 3
+          done
