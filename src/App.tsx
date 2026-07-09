@@ -47,11 +47,11 @@ export default function App() {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const countyKeyRef = useRef<string>("COUNTYNAME");
   const hoverRef = useRef<mapboxgl.Popup | null>(null);
-  const [visible, setVisible] = useState<Set<Cat>>(new Set(CATS.map((c) => c.id)));
+  const [visible, setVisible] = useState<Set<Cat>>(new Set());
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [showMemo, setShowMemo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
-  const [newsOpen, setNewsOpen] = useState(true);
+  const [newsOpen, setNewsOpen] = useState(false);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs">("dark");
@@ -681,11 +681,15 @@ export default function App() {
         if (!g) continue; const geom = LAKE_GEOM[g];
         polyFeats.push({ type: "Feature", properties: { kind: "max", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.max] } });
         polyFeats.push({ type: "Feature", properties: { kind: "cur", name: l.name, desc: geom.desc }, geometry: { type: "Polygon", coordinates: [geom.cur] } });
-        damFeats.push({ type: "Feature", properties: { name: l.name, part: "toe" }, geometry: { type: "LineString", coordinates: geom.dam } });
+        // 壩體往兩端延伸插入山壁(interleaved 會把山體內的部分遮掉)，使壩體貼緊兩側山壁封住谷口
+        const dam = geom.dam as number[][];
+        const ddx = dam[1][0] - dam[0][0], ddy = dam[1][1] - dam[0][1], EXT = 1.7;
+        const damExt = [[dam[0][0] - ddx * EXT, dam[0][1] - ddy * EXT], [dam[1][0] + ddx * EXT, dam[1][1] + ddy * EXT]];
+        damFeats.push({ type: "Feature", properties: { name: l.name, part: "toe" }, geometry: { type: "LineString", coordinates: damExt } });
         // 壩頂：往下游(東)平移一小段的平行線，表示壩體寬度與壩頂
-        const crest = (geom.dam as number[][]).map((c) => [c[0] + 0.0016, c[1]]);
+        const crest = damExt.map((c) => [c[0] + 0.0016, c[1]]);
         damFeats.push({ type: "Feature", properties: { name: l.name, part: "crest" }, geometry: { type: "LineString", coordinates: crest } });
-        const damBody = [[...(geom.dam as number[][]), ...crest.slice().reverse(), geom.dam[0]]];
+        const damBody = [[...damExt, ...crest.slice().reverse(), damExt[0]]];
         damFeats.push({ type: "Feature", properties: { name: l.name, part: "body" }, geometry: { type: "Polygon", coordinates: damBody } });
         // 3D 實體：水面填到水位高程、壩體填到壩頂高程
         if (geom.level) deckWater.push({ polygon: geom.max, elev: geom.level, name: l.name });
@@ -1274,27 +1278,29 @@ export default function App() {
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">消息 {newsOpen ? "◂" : "▸"}</button>
         <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 最新空照(NASA GIBS)">底圖：{BASEMAP_LABEL[basemap]}</button>
-        <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱(近1小時雨量)">雨量</button>
-        {rainInfo && <div className="rain-info">{rainInfo}</div>}
-        <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期顯著有感地震：震央 + 不規則震度擴散範圍">地震</button>
-        {quakeInfo && <div className="quake-info">{quakeInfo}</div>}
-        <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱(藍冷紅熱，20°C 為中點)">氣溫</button>
-        {tempInfo && <div className="temp-info">{tempInfo}</div>}
-        <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)，點站看最新數據">測站</button>
-        <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風循環：關 → 颱風路徑/暴風圈 → 颱風+去背空照(只露颱風雲系)">{typhoonMode === 0 ? "颱風" : typhoonMode === 1 ? "颱風：路徑" : "颱風：去背空照"}</button>
-        {typhoonInfo && <div className="ty-info">{typhoonInfo}</div>}
+        <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
+        <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
+        <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
+        <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)">測站</button>
+        <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風循環：關 → 颱風路徑 → 颱風+去背空照">{typhoonMode === 0 ? "颱風" : typhoonMode === 1 ? "颱風：路徑" : "颱風：去背空照"}</button>
         <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
-        {oceanInfo && <div className="ocean-info">{oceanInfo}</div>}
-        <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環(跟底圖同邏輯)：關 → 河流線+河名 → 河流+即時水位高度(滑過站點看水量高度與時間)">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
-        {wallInfo && <div className="wall-info">{wallInfo}</div>}
-        <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS(近岸為主，軍艦多半靜默)">中國船</button>
-        {shipsInfo && <div className="ship-info">{shipsInfo}</div>}
-        <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層(點開後可勾選)">山岳</button>
-        {peaksInfo && <div className="peak-info">{peaksInfo}</div>}
-        <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):監測中堰塞湖，馬太鞍溪為真實湖體">堰塞湖</button>
-        {lakeInfo && <div className="lake-info">{lakeInfo}</div>}
-        <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間，疊出各期間入侵密度">中國入侵</button>
-        {gzInfo && <div className="gz-info">{gzInfo}</div>}
+        <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環：關 → 河流線+河名 → 河流+即時水位高度">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
+        <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS + 近7天航跡">中國船</button>
+        <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
+        <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):馬太鞍溪/萬里溪為真實湖體">堰塞湖</button>
+        <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
+      </div>
+      <div className="layer-info-col">
+        {rainInfo && <div className="li">{rainInfo}</div>}
+        {quakeInfo && <div className="li">{quakeInfo}</div>}
+        {tempInfo && <div className="li">{tempInfo}</div>}
+        {typhoonInfo && <div className="li">{typhoonInfo}</div>}
+        {oceanInfo && <div className="li">{oceanInfo}</div>}
+        {wallInfo && <div className="li">{wallInfo}</div>}
+        {shipsInfo && <div className="li">{shipsInfo}</div>}
+        {peaksInfo && <div className="li">{peaksInfo}</div>}
+        {lakeInfo && <div className="li">{lakeInfo}</div>}
+        {gzInfo && <div className="li">{gzInfo}</div>}
       </div>
       {newsOpen && (
         <div className="news-panel">
