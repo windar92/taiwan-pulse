@@ -91,6 +91,8 @@ export default function App() {
   const [oceanOn, setOceanOn] = useState(false);
   const [oceanInfo, setOceanInfo] = useState<string>("");
   const [riversOn, setRiversOn] = useState(false);
+  const [riversInfo, setRiversInfo] = useState("");
+  const riversGeoRef = useRef<any>(null);
   const riverPopRef = useRef<mapboxgl.Popup | null>(null);
   const [riverMode, setRiverMode] = useState(0);
   const riverModeRef = useRef(0);
@@ -564,31 +566,56 @@ export default function App() {
       setShipsInfo((s) => (s ? s.replace(/，異常.*$/, "") : s) + `　航跡 ${d.vessels} 艘${extra}`);
     } catch {}
   }
-  // ===== 河流圖層(用 Mapbox 底圖 waterway，常態畫線 + 河名 + hover 高亮整條) =====
-  function toggleRivers() {
+  // ===== 河流圖層(改用 OSM 具名河川資料:含中文河名,常態顯示所有河名 + hover 高亮整條同名河流) =====
+  // 從 OpenStreetMap Overpass 取台灣具名河川(waterway=river,含中文 name)。POST 請求 + localStorage 快取(14天)。
+  async function loadTaiwanRivers(): Promise<any> {
+    if (riversGeoRef.current) return riversGeoRef.current;
+    try {
+      const cached = localStorage.getItem("twRiversGeo");
+      if (cached) { const o = JSON.parse(cached); if (o.t && Date.now() - o.t < 14 * 86400000 && o.geo?.features?.length) { riversGeoRef.current = o.geo; return o.geo; } }
+    } catch {}
+    const query = `[out:json][timeout:90];way["waterway"~"^(river|canal)$"]["name"](21.85,119.9,25.45,122.15);out geom;`;
+    const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(query) });
+    const j = await res.json();
+    const features = (j.elements || []).filter((e: any) => e.type === "way" && e.geometry?.length > 1).map((e: any) => ({
+      type: "Feature",
+      properties: { name: e.tags?.["name:zh"] || e.tags?.name || "" },
+      geometry: { type: "LineString", coordinates: e.geometry.map((p: any) => [p.lon, p.lat]) },
+    }));
+    const geo = { type: "FeatureCollection", features };
+    riversGeoRef.current = geo;
+    try { localStorage.setItem("twRiversGeo", JSON.stringify({ t: Date.now(), geo })); } catch {}
+    return geo;
+  }
+  async function toggleRivers() {
     const m = mapRef.current; if (!m) return;
     const on = !riversOn;
     const ids = ["rivers-line", "rivers-hl", "rivers-label"];
-    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); riverPopRef.current?.remove(); setRiversOn(false); return; }
+    if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); riverPopRef.current?.remove(); setRiversOn(false); setRiversInfo(""); return; }
+    setRiversOn(true);
     if (!m.getLayer("rivers-line")) {
+      setRiversInfo("河名載入中…(OpenStreetMap 具名河川)");
+      let geo: any; try { geo = await loadTaiwanRivers(); } catch { setRiversInfo("河名資料載入失敗，請稍後重試"); return; }
+      if (!m || !mapRef.current) return;
+      if (!m.getSource("tw-rivers")) m.addSource("tw-rivers", { type: "geojson", data: geo });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "rivers-line", type: "line", source: "composite", "source-layer": "waterway", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4aa3df", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.6, 11, 2], "line-opacity": 0.85 } }, beforeId);
-      m.addLayer({ id: "rivers-hl", type: "line", source: "composite", "source-layer": "waterway", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 2.5, 11, 6], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
-      m.addLayer({ id: "rivers-label", type: "symbol", source: "composite", "source-layer": "waterway", layout: { "symbol-placement": "line", "text-field": ["coalesce", ["get", "name_zh-Hant"], ["get", "name_zh-Hans"], ["get", "name"]], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 13, 13], "text-allow-overlap": true, "text-ignore-placement": true, "symbol-spacing": 350 }, paint: { "text-color": "#cdeeff", "text-halo-color": "#06203f", "text-halo-width": 1.6 } });
-      const RIVER_NAME: any = ["coalesce", ["get", "name_zh-Hant"], ["get", "name_zh-Hans"], ["get", "name"]];
+      m.addLayer({ id: "rivers-line", type: "line", source: "tw-rivers", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": "#4aa3df", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.8, 11, 2.4], "line-opacity": 0.85 } }, beforeId);
+      m.addLayer({ id: "rivers-hl", type: "line", source: "tw-rivers", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 7], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
+      m.addLayer({ id: "rivers-label", type: "symbol", source: "tw-rivers", layout: { "symbol-placement": "line", "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 10, 12, 14], "text-allow-overlap": true, "text-ignore-placement": true, "symbol-spacing": 300 }, paint: { "text-color": "#e6f6ff", "text-halo-color": "#06203f", "text-halo-width": 1.8 } });
       m.on("mousemove", "rivers-line", (e) => {
-        const f = e.features?.[0]; if (!f) return; const pr = (f.properties as any) || {};
-        const nm = pr["name_zh-Hant"] || pr["name_zh-Hans"] || pr.name; if (!nm) return;
-        // 高亮該名稱指稱的完整河段/整條同名河流(不同名的上下游支流不受影響)
-        m.setFilter("rivers-hl", ["==", RIVER_NAME, nm]);
+        const f = e.features?.[0]; if (!f) return; const nm = (f.properties as any)?.name; if (!nm) return;
+        // 高亮該名稱指稱的整條同名河流(如濁水溪只亮濁水溪本流,支流各有其名不受影響)
+        m.setFilter("rivers-hl", ["==", ["get", "name"], nm]);
         m.getCanvas().style.cursor = "pointer";
         riverPopRef.current?.remove();
         riverPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat(e.lngLat).setText(nm).addTo(m);
       });
-      m.on("mouseleave", "rivers-line", () => { m.setFilter("rivers-hl", ["==", RIVER_NAME, "___none___"]); m.getCanvas().style.cursor = ""; riverPopRef.current?.remove(); });
+      m.on("mouseleave", "rivers-line", () => { m.setFilter("rivers-hl", ["==", ["get", "name"], "___none___"]); m.getCanvas().style.cursor = ""; riverPopRef.current?.remove(); });
+      setRiversInfo(`河流：OpenStreetMap 具名河川 ${geo.features.length} 條　滑鼠指到可高亮整條並顯示河名`);
+    } else {
+      setRiversInfo(`河流：OpenStreetMap 具名河川　滑鼠指到可高亮整條並顯示河名`);
     }
-    for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
-    setRiversOn(true);
+    for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
   }
   // 河流循環：關 → 河流 → 河流+即時水位高度(跟底圖同邏輯)
   function cycleRiver() {
@@ -1374,6 +1401,7 @@ export default function App() {
       </div>
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
+        {riversInfo && <div className="li">{riversInfo}</div>}
         {rainInfo && <div className="li">{rainInfo}</div>}
         {quakeInfo && <div className="li">{quakeInfo}</div>}
         {tempInfo && <div className="li">{tempInfo}</div>}
