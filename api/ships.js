@@ -26,7 +26,7 @@ async function readHandler(req, res, url) {
       const recent = await listShips({ minutes: 4320, limit: 5 });
       return send(res, 200, { ok: true, raw, sampleCount: recent.length, sample: recent }, "no-store");
     }
-    const ships = await listShips({ minutes: 180, limit: 6000 });
+    const ships = await listShips({ minutes: 10080, limit: 12000 }); // 近 7 天內出現過的中國籍船(每船最新位置)
     return send(res, 200, { ok: true, count: ships.length, ships }, "s-maxage=60, stale-while-revalidate=120");
   } catch (e) {
     return send(res, 500, { ok: false, error: e.message, ships: [] }, "no-store");
