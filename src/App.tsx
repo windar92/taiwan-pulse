@@ -604,7 +604,7 @@ export default function App() {
   async function toggleRivers() {
     const m = mapRef.current; if (!m) return;
     const on = !riversOn;
-    const ids = ["rivers-line", "rivers-hit", "rivers-hl", "rivers-label"];
+    const ids = ["rivers-line", "rivers-hit", "rivers-hl"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); riverPopRef.current?.remove(); setRiversOn(false); setRiversInfo(""); return; }
     setRiversOn(true);
     if (!m.getLayer("rivers-line")) {
@@ -617,8 +617,7 @@ export default function App() {
       m.addLayer({ id: "rivers-hl", type: "line", source: "tw-rivers", filter: ["==", ["get", "name"], "___none___"], paint: { "line-color": "#9fe6ff", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 3, 11, 7], "line-opacity": 0.95, "line-blur": 0.5 } }, beforeId);
       // 寬透明線,加大 hover 命中範圍(細線不易指到)
       m.addLayer({ id: "rivers-hit", type: "line", source: "tw-rivers", paint: { "line-color": "#000", "line-opacity": 0.01, "line-width": 14 } }, beforeId);
-      // 河名:用 line-center(每條一個標籤,與 3D 地形相容,line 模式在地形上會消失)
-      m.addLayer({ id: "rivers-label", type: "symbol", source: "tw-rivers", minzoom: 7, layout: { "symbol-placement": "line-center", "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 14], "text-allow-overlap": true, "text-ignore-placement": true, "text-padding": 1 }, paint: { "text-color": "#e6f6ff", "text-halo-color": "#06203f", "text-halo-width": 1.8 } });
+      // 河名不常態顯示(3D 地形上沿線文字會被遮掉且易雜亂),改為 hover 時以浮標顯示該河河名
       m.on("mousemove", "rivers-hit", (e) => {
         const f = e.features?.[0]; if (!f) return; const nm = (f.properties as any)?.name; if (!nm) return;
         // 高亮該名稱指稱的整條同名河流(如濁水溪只亮濁水溪本流,支流各有其名不受影響)
