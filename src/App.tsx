@@ -939,9 +939,13 @@ export default function App() {
       // 水利署 waterlevel 是「水位標高(海拔)」，真正的水深 = 水位標高 − 該站零點高程(zero_elev)
       const z = Number(s.zero_elev);
       const hasZ = Number.isFinite(z);
-      const curD = hasZ ? Number(s.cur_level) - z : null;
+      // 水深合理範圍(公尺)：低於 -2m 或高於 60m 視為異常/缺測，不顯示數字
+      const okD = (d: number | null) => d != null && Number.isFinite(d) && d > -2 && d < 60;
+      const rawCur = hasZ ? Number(s.cur_level) - z : null;
+      const curD = okD(rawCur) ? rawCur : null;
       const hasAvg = s.avg_level != null && s.avg_level !== "" && Number.isFinite(Number(s.avg_level));
-      const avgD = (hasZ && hasAvg) ? Number(s.avg_level) - z : null;
+      const rawAvg = (hasZ && hasAvg) ? Number(s.avg_level) - z : null;
+      const avgD = okD(rawAvg) ? rawAvg : null;
       const fmt = (d: number | null) => (d == null ? "—" : `${Math.round(d * 100)}cm`);
       // 上=現在水深、下=平均水深(絕對值 cm)
       const lbl = `${fmt(curD)}\n──────\n${avgD != null ? fmt(avgD) : "累積中"}`;
@@ -982,7 +986,11 @@ export default function App() {
     try {
       const d = await fetch("/api/live?ds=river&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
       if (!d.ok || !(d.stations || []).length) { setWallInfo("河川水位資料暫時無法取得"); return; }
-      wallDataRef.current = d.stations.filter((s: any) => typeof s.lng === "number" && typeof s.lat === "number" && typeof s.cur_level === "number");
+      // 濾掉缺測哨兵值(水利署以 -9999/-999 等表示無資料)與不合理高程，避免算出「負一百萬公分」
+      const sane = (v: any) => typeof v === "number" && Number.isFinite(v) && v > -100 && v < 4000;
+      wallDataRef.current = d.stations
+        .filter((s: any) => typeof s.lng === "number" && typeof s.lat === "number" && sane(s.cur_level))
+        .map((s: any) => ({ ...s, avg_level: sane(s.avg_level) ? s.avg_level : null, zero_elev: sane(s.zero_elev) ? s.zero_elev : null }));
       wallExagRef.current = wallExag; wallWidthRef.current = wallWidth;
       if (!riverGeoRef.current || !riverGeoRef.current.length) {
         setWallInfo("載入河道幾何中…");
