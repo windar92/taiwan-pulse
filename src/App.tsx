@@ -107,6 +107,7 @@ export default function App() {
   const peaksDataRef = useRef<any>(null);
   const [lakeOn, setLakeOn] = useState(false);
   const [lakeInfo, setLakeInfo] = useState<string>("");
+  const lakeLevelRef = useRef<any>(null);
   const lakePopRef = useRef<mapboxgl.Popup | null>(null);
   const [gzOn, setGzOn] = useState(false);
   const gzPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -757,13 +758,32 @@ export default function App() {
     const ids = ["lake-max-fill", "lake-max-line", "lake-cur-fill", "lake-damband", "lake-dam", "lake-damtop", "lake-ring", "lake-pt", "lake-label"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setDeckLayers("lake", []); lakePopRef.current?.remove(); setLakeOn(false); setLakeInfo(""); return; }
     try {
-      const d = await fetch("/api/live?ds=barrierlake&t=" + Date.now()).then((r) => r.json());
+      const [d, lv] = await Promise.all([
+        fetch("/api/live?ds=barrierlake&t=" + Date.now()).then((r) => r.json()),
+        fetch("/api/live?ds=lakelevel&t=" + Math.floor(Date.now() / 300000)).then((r) => r.json()).catch(() => null),
+      ]);
       if (!d.ok || !(d.lakes || []).length) { setLakeInfo("堰塞湖資料暫時無法取得"); return; }
+      lakeLevelRef.current = lv;
       const OFFICIAL = "https://qlakenew.forest.gov.tw/FarmlandQlakenew/LandslideDam";
+      // 即時水位(林保署)：馬太鞍溪只有「下游橋」水位，湖面本身無感測器;萬里溪完全沒有即時水位
+      const liveFor = (name: string) => {
+        const b = lv?.matai_bridge, h = lv?.hehuan_lake;
+        if (name.includes("馬太鞍") && b?.level != null) {
+          return `即時水位（下游 ${b.name}）：<b>${b.level.toFixed(2)} m</b>${b.alertTop != null ? `　警戒 ${b.alertTop.toFixed(2)} m` : ""}<br/><span style="opacity:.75;font-size:11px">※此為下游橋河道水位，非湖面水位（湖面無感測器）${b.time ? `・${b.time}` : ""}</span>`;
+        }
+        if (name.includes("合歡溪") && h?.level != null) {
+          return `湖面即時水位：<b>${h.level.toFixed(2)} m</b>${h.alertTop != null ? `　溢流 ${h.alertTop.toFixed(2)} m` : ""}${h.time ? `<br/><span style="opacity:.6;font-size:11px">${h.time}</span>` : ""}`;
+        }
+        if (name.includes("萬里溪")) return `<span style="opacity:.75;font-size:11px">※官方未公開此湖即時水位</span>`;
+        return "";
+      };
+      const staticNote = (name: string) =>
+        (name.includes("馬太鞍") || name.includes("萬里溪"))
+          ? `<br/><span style="opacity:.7;font-size:11px">3D 湖面／湖體為 DEM 推估快照，非即時變動</span>` : "";
       const fc = { type: "FeatureCollection", features: d.lakes.map((l: any) => {
         const [lng, lat] = lakeCoord(l.name || "");
         const dk = Object.keys(LAKE_DESC).find((k) => (l.name || "").includes(k));
-        return { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { name: l.name, alert: l.alert || "gray", warn: l.warn ? 1 : 0, rainalert: l.rainalert || "無", upd: l.upd || "", desc: dk ? LAKE_DESC[dk] : "" } };
+        return { type: "Feature", geometry: { type: "Point", coordinates: [lng, lat] }, properties: { name: l.name, alert: l.alert || "gray", warn: l.warn ? 1 : 0, rainalert: l.rainalert || "無", upd: l.upd || "", desc: dk ? LAKE_DESC[dk] : "", live: liveFor(l.name || ""), snote: staticNote(l.name || "") } };
       }) } as any;
       const colorByAlert = ["match", ["get", "alert"], "red", "#e53935", "orange", "#fb8c00", "yellow", "#ffca28", "#78909c"];
       if (m.getSource("lake-src")) (m.getSource("lake-src") as mapboxgl.GeoJSONSource).setData(fc);
@@ -777,8 +797,9 @@ export default function App() {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
           lakePopRef.current?.remove();
           const descHtml = p.desc ? `<br/><span style="opacity:.9">${p.desc}</span>` : "";
-          lakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip", maxWidth: "320px" }).setLngLat((f.geometry as any).coordinates).setHTML(
-            `<div class="qpop"><b>${p.name}</b><br/>狀態：${alertTxt(p.alert)}<br/>雨量警戒：${p.rainalert}${descHtml}<br/><span style="opacity:.6;font-size:11px">詳情見<a href="${OFFICIAL}" target="_blank" rel="noopener" style="color:#8ecbff">官方監測系統</a></span></div>`
+          const liveHtml = p.live ? `<div style="margin:5px 0;padding:5px 7px;background:rgba(60,140,220,0.16);border-radius:5px">${p.live}</div>` : "";
+          lakePopRef.current = new mapboxgl.Popup({ offset: 12, className: "hover-tip", maxWidth: "340px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.name}</b><br/>狀態：${alertTxt(p.alert)}<br/>雨量警戒：${p.rainalert}${liveHtml}${descHtml}${p.snote || ""}<br/><span style="opacity:.6;font-size:11px">詳情見<a href="${OFFICIAL}" target="_blank" rel="noopener" style="color:#8ecbff">官方監測系統</a></span></div>`
           ).addTo(m);
         });
         m.on("mouseenter", "lake-pt", () => { m.getCanvas().style.cursor = "pointer"; });
@@ -828,7 +849,11 @@ export default function App() {
       ]);
       for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "visible");
       const nWarn = d.lakes.filter((l: any) => (l.alert || "gray") !== "gray").length;
-      setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}`);
+      const b = lv?.matai_bridge, h = lv?.hehuan_lake;
+      const liveBits: string[] = [];
+      if (b?.level != null) liveBits.push(`馬太鞍溪橋(下游) ${b.level.toFixed(2)}m${b.alertTop != null ? `/警戒 ${b.alertTop.toFixed(2)}m` : ""}`);
+      if (h?.level != null) liveBits.push(`合歡溪湖面 ${h.level.toFixed(2)}m${h.alertTop != null ? `/溢流 ${h.alertTop.toFixed(2)}m` : ""}`);
+      setLakeInfo(`監測中堰塞湖 ${d.lakes.length} 處${nWarn ? `，警戒 ${nWarn} 處` : "，目前均無警戒"}${liveBits.length ? `\n即時水位：${liveBits.join("　")}` : ""}\n馬太鞍/萬里溪 3D 湖體為 DEM 推估快照(官方未公開湖面即時水位)`);
       setLakeOn(true);
     } catch { setLakeInfo("堰塞湖資料載入失敗"); }
   }
@@ -1455,7 +1480,7 @@ export default function App() {
         {wallInfo && <div className="li">{wallInfo}</div>}
         {shipsInfo && <div className="li">{shipsInfo}</div>}
         {peaksInfo && <div className="li">{peaksInfo}</div>}
-        {lakeInfo && <div className="li">{lakeInfo}</div>}
+        {lakeInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{lakeInfo}</div>}
         {gzInfo && <div className="li">{gzInfo}</div>}
       </div>
       {newsOpen && (
