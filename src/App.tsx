@@ -740,7 +740,7 @@ export default function App() {
     萬里溪: {
       max: [[121.3444,23.8555],[121.3455,23.8551],[121.346,23.8542],[121.3467,23.8536],[121.347,23.853],[121.347,23.852],[121.347,23.8511],[121.347,23.8501],[121.347,23.8492],[121.3463,23.8498],[121.3453,23.8508],[121.3443,23.8511],[121.3432,23.8504],[121.3422,23.8501],[121.3415,23.8492],[121.3405,23.8486],[121.3394,23.8486],[121.3386,23.849],[121.3379,23.8498],[121.3377,23.8508],[121.3386,23.8512],[121.3394,23.852],[121.3401,23.853],[121.341,23.8536],[121.342,23.8542],[121.3431,23.8547],[121.3439,23.8551],[121.3444,23.8555]],
       cur: [[121.3444,23.8555],[121.3455,23.8551],[121.346,23.8542],[121.3467,23.8536],[121.347,23.853],[121.347,23.852],[121.347,23.8511],[121.347,23.8501],[121.347,23.8492],[121.3463,23.8498],[121.3453,23.8508],[121.3443,23.8511],[121.3432,23.8504],[121.3422,23.8501],[121.3415,23.8492],[121.3405,23.8486],[121.3394,23.8486],[121.3386,23.849],[121.3379,23.8498],[121.3377,23.8508],[121.3386,23.8512],[121.3394,23.852],[121.3401,23.853],[121.341,23.8536],[121.342,23.8542],[121.3431,23.8547],[121.3439,23.8551],[121.3444,23.8555]],
-      dam: [[121.3477,23.8488],[121.3477,23.8558]],
+      dam: [[121.3467,23.8488],[121.3467,23.8558]],
       damExt: 0.2,
       level: 1066, crest: 1086,
       desc: "萬里溪堰塞湖(花蓮萬榮，2026/6 形成)：位萬里溪上游林田山 96/82 林班交界、距七彩湖約 7km。壩高約 114m、溢流口 1086m、目前水位約 1066.4m；崩塌約 45 公頃、最大蓄水約 510 萬 m³，推估約 7/12 滿水位。範圍由 30m DEM 淹沒至官方水面高程 1066m 推得(面積約 44 公頃與官方約 45 公頃吻合)。紅線=崩塌壩體。",
@@ -910,7 +910,14 @@ export default function App() {
     // IDW 內插:不設硬截斷,長空檔中間的點主要由前後兩個最近站決定(沿河補牆)
     const idwAll = (pt: number[]) => { let ws = 0, cur = 0, ref = 0; for (const s of st) { const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]); const w = 1 / (d * d + 1e-6); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return { cur: cur / ws, ref: ref / ws }; };
     const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
-    for (const s of st) ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "" }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+    for (const s of st) {
+      // 站點標籤：現在水量(絕對值 cm) / 分隔線 / 平均水量(絕對值 cm)
+      const curCm = Math.round(Math.abs(Number(s.cur_level)) * 100);
+      const hasAvg = s.avg_level != null && s.avg_level !== "" && Number.isFinite(Number(s.avg_level));
+      const avgCm = hasAvg ? Math.round(Math.abs(Number(s.avg_level)) * 100) : null;
+      const lbl = `${curCm}cm\n──────\n${avgCm != null ? avgCm + "cm" : "累積中"}`;
+      ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "", lbl }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+    }
     for (const river of geo) {
       const L = river.coords; if (!L || L.length < 2) continue;
       // bbox 預剪:整條河外接框附近都沒站就跳過(大幅省算)
@@ -941,7 +948,7 @@ export default function App() {
   async function toggleWaterWall() {
     const m = mapRef.current; if (!m) return;
     const on = !wallOn;
-    const ids = ["ww-base", "ww-top", "ww-pt"];
+    const ids = ["ww-base", "ww-top", "ww-pt", "ww-label"];
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); wallPopRef.current?.remove(); if (wallMoveRef.current) { m.off("moveend", wallMoveRef.current); wallMoveRef.current = null; } setWallOn(false); setWallInfo(""); return; }
     try {
       const d = await fetch("/api/live?ds=river&t=" + Math.floor(Date.now() / 60000)).then((r) => r.json());
@@ -961,6 +968,16 @@ export default function App() {
         m.addLayer({ id: "ww-base", type: "fill-extrusion", source: "ww-base-src", paint: { "fill-extrusion-color": "#0b3d91", "fill-extrusion-base": 0, "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.82 } });
         m.addLayer({ id: "ww-top", type: "fill-extrusion", source: "ww-top-src", paint: { "fill-extrusion-color": "#7a4a21", "fill-extrusion-base": ["get", "base"], "fill-extrusion-height": ["get", "h"], "fill-extrusion-opacity": 0.9 } });
         m.addLayer({ id: "ww-pt", type: "circle", source: "ww-pt-src", paint: { "circle-radius": 3, "circle-color": "#9fd8ff", "circle-stroke-width": 0.6, "circle-stroke-color": "#08304e" } });
+        // 各觀測站常態顯示：現在水量 / 平均水量(絕對值 cm)
+        m.addLayer({
+          id: "ww-label", type: "symbol", source: "ww-pt-src",
+          layout: {
+            "text-field": ["get", "lbl"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 13],
+            "text-line-height": 1.05, "text-anchor": "bottom", "text-offset": [0, -0.6],
+            "text-allow-overlap": true, "text-ignore-placement": true,
+          },
+          paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 2 },
+        });
         const wallHtml = (p: any) => { const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) + " m" : "累積中"; const tt = p.t ? String(p.t).replace("T", " ").slice(0, 16) : ""; return `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>即時水量高度 <b>${Number(p.cur).toFixed(2)} m</b><br/>平均水量高度 ${avg}<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m${tt ? `<br/><span style="opacity:.6;font-size:11px">觀測 ${tt}</span>` : ""}</div>`; };
         m.on("mousemove", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; m.getCanvas().style.cursor = "pointer"; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(wallHtml(f.properties)).addTo(m); });
         m.on("mouseleave", "ww-pt", () => { m.getCanvas().style.cursor = ""; wallPopRef.current?.remove(); });
