@@ -199,6 +199,45 @@ async function barrierlake() {
   return { ok: true, count: lakes.length, lakes };
 }
 
+// ---- 堰塞湖即時水位(林保署儀錶板 getWST，免金鑰，需固定 SAMEGUID header) ----
+// 注意：目前林保署只在「合歡溪」裝湖內水位計；「馬太鞍溪」只公開下游馬太鞍溪橋的河道水位；萬里溪無任何即時水位。
+const QLAKE_GUID = "6334159a-a66d-4ab6-9dda-48fed3bb2217";
+async function qlakeWST(route) {
+  const r = await fetch(`https://qlakenew.forest.gov.tw/FarmlandQlakenew/${route}/getWST`, {
+    headers: {
+      "SAMEGUID": QLAKE_GUID,
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) taiwan-pulse",
+      "Accept": "application/json, text/plain, */*",
+      "X-Requested-With": "XMLHttpRequest",
+      "Referer": `https://qlakenew.forest.gov.tw/FarmlandQlakenew/${route}`,
+    },
+  });
+  if (!r.ok) return [];
+  const j = await r.json().catch(() => []);
+  return (Array.isArray(j) ? j : []).map((o) => {
+    const vals = String(o.Value ?? "").split(",").map((v) => parseFloat(v)).filter((v) => Number.isFinite(v));
+    const cur = Number.isFinite(parseFloat(o.maxValue)) ? parseFloat(o.maxValue) : (vals.length ? vals[vals.length - 1] : null);
+    return {
+      id: o.StationID, name: String(o.Name || "").replace(/​/g, "").trim(),
+      level: cur, time: o.maxDatetime || null,
+      alertTop: Number.isFinite(parseFloat(o.alertTOP)) ? parseFloat(o.alertTOP) : null,
+      series: vals.slice(-24),
+    };
+  }).filter((s) => s.level != null);
+}
+async function lakelevel() {
+  const [matai, hehuan] = await Promise.all([
+    qlakeWST("BarrierLake").catch(() => []),      // 馬太鞍溪橋(下游河道水位，非湖面)
+    qlakeWST("BarrierLakeLiwu").catch(() => []),  // 合歡溪堰塞湖(真正的湖面水位)
+  ]);
+  return {
+    ok: true,
+    matai_bridge: matai[0] || null,   // 下游橋水位
+    hehuan_lake: hehuan[0] || null,   // 湖面水位
+    note: "馬太鞍溪僅有下游橋水位；合歡溪為湖面水位；萬里溪無即時水位資料",
+  };
+}
+
 export default async function handler(req, res) {
   const url = new URL(req.url, "http://x");
   const ds = url.searchParams.get("ds") || "";
@@ -213,6 +252,7 @@ export default async function handler(req, res) {
       case "peaks": return send(res, 200, await peaks(Number(url.searchParams.get("min")) || 1000), "s-maxage=86400, stale-while-revalidate=604800");
       case "rivergeo": return send(res, 200, await rivergeo(), "s-maxage=86400, stale-while-revalidate=604800");
       case "barrierlake": return send(res, 200, await barrierlake(), "s-maxage=300, stale-while-revalidate=900");
+      case "lakelevel": return send(res, 200, await lakelevel(), "s-maxage=300, stale-while-revalidate=600");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
