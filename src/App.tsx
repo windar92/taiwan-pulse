@@ -970,11 +970,11 @@ export default function App() {
         m.addLayer({ id: "ww-pt", type: "circle", source: "ww-pt-src", paint: { "circle-radius": 3, "circle-color": "#9fd8ff", "circle-stroke-width": 0.6, "circle-stroke-color": "#08304e" } });
         // 各觀測站常態顯示：現在水量 / 平均水量(絕對值 cm)
         m.addLayer({
-          id: "ww-label", type: "symbol", source: "ww-pt-src",
+          id: "ww-label", type: "symbol", source: "ww-pt-src", minzoom: 8,
           layout: {
-            "text-field": ["get", "lbl"], "text-size": ["interpolate", ["linear"], ["zoom"], 7, 10, 12, 13],
+            "text-field": ["get", "lbl"], "text-size": ["interpolate", ["linear"], ["zoom"], 8, 10, 12, 13],
             "text-line-height": 1.05, "text-anchor": "bottom", "text-offset": [0, -0.6],
-            "text-allow-overlap": true, "text-ignore-placement": true,
+            "text-allow-overlap": false, "text-ignore-placement": false, "text-padding": 3,
           },
           paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 2 },
         });
