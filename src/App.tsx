@@ -7,7 +7,20 @@ const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 const HOME_KEY = "tp-home";
 const DEFAULT_HOME = { lng: 120.95, lat: 23.8, zoom: 7.3 };
 const COUNTY_GEOJSON = "https://raw.githubusercontent.com/g0v/twgeojson/master/json/twCounty2010.geo.json";
-const RAIN_H = 700; // 雨量水柱示意高度倍率(柱高與標號高度共用)
+// 雨量水柱高度：各時距用各自的線性倍率與上限，讓柱高與雨量成「真實正比」。
+// 舊版固定 min(v,80)*700，24h 模式下豪雨(200~500mm)全部撞到 80mm 上限 → 柱高一樣高，看不出差異。
+const RAIN_H_1H = 700, RAIN_H_24H = 70;      // 公尺/mm(24h 數值約大10倍，倍率相應縮小)
+const RAIN_CAP_1H = 250, RAIN_CAP_24H = 1200; // 僅防呆用的極端上限，正常不會觸及
+const rainScale = (metric: "1h" | "24h") => (metric === "24h" ? RAIN_H_24H : RAIN_H_1H);
+const rainCap = (metric: "1h" | "24h") => (metric === "24h" ? RAIN_CAP_24H : RAIN_CAP_1H);
+const rainColH = (metric: "1h" | "24h", v: number) => Math.min(v || 0, rainCap(metric)) * rainScale(metric);
+// 顏色分級也依時距調整(24h 的門檻約為 1h 的 10 倍)
+const rainColorStops = (metric: "1h" | "24h"): any[] =>
+  metric === "24h" ? [0, "#bcd9ff", 30, "#6baed6", 100, "#2171b5", 300, "#08306b"]
+                   : [0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"];
+const rainDotStops = (metric: "1h" | "24h"): any[] =>
+  metric === "24h" ? [0, "rgba(120,140,160,0.5)", 3, "#9ecae1", 60, "#4292c6", 250, "#08519c"]
+                   : [0, "rgba(120,140,160,0.5)", 0.5, "#9ecae1", 10, "#4292c6", 40, "#08519c"];
 const TEMP_H = 520; // (保留)
 const TEMP_COL_H = 2600; // 氣溫柱固定高度(所有柱等高，溫度只用顏色表示)
 function qDate(t: string) { if (!t) return ""; const d = new Date(t); const p = (n: number) => String(n).padStart(2, "0"); return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; }
@@ -451,7 +464,15 @@ export default function App() {
     const fc = rainHexFC(stations, metric);
     (m.getSource("rain") as mapboxgl.GeoJSONSource)?.setData(fc);
     (m.getSource("rain-dot") as mapboxgl.GeoJSONSource)?.setData(rainDotFC(stations, metric));
-    const peaks = rainPeaks(stations, metric).map((s: any) => ({ ...s, v: rainVal(s, metric), z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + Math.min(rainVal(s, metric), 80) * RAIN_H }));
+    // 依目前時距重設柱高倍率與顏色分級(切換 1h/24h 時比例才正確)
+    if (m.getLayer("rain-col")) {
+      m.setPaintProperty("rain-col", "fill-extrusion-height", ["*", ["min", ["get", "r1"], rainCap(metric)], rainScale(metric)] as any);
+      m.setPaintProperty("rain-col", "fill-extrusion-color", ["case", ["boolean", ["feature-state", "hover"], false], "#ffffff", ["interpolate", ["linear"], ["get", "r1"], ...rainColorStops(metric)]] as any);
+    }
+    if (m.getLayer("rain-dot")) {
+      m.setPaintProperty("rain-dot", "circle-color", ["interpolate", ["linear"], ["get", "v"], ...rainDotStops(metric)] as any);
+    }
+    const peaks = rainPeaks(stations, metric).map((s: any) => ({ ...s, v: rainVal(s, metric), z: ((m.queryTerrainElevation([s.lon, s.lat], { exaggerated: true }) as number) || 0) + rainColH(metric, rainVal(s, metric)) }));
     setDeckLayers("rain", [new TextLayer({
       id: "rain-peak-text", data: peaks,
       getPosition: (d: any) => [d.lon, d.lat, d.z], getText: (d: any) => `${d.name} ${Math.round(d.v)}mm`,
@@ -461,7 +482,8 @@ export default function App() {
       background: true, getBackgroundColor: [6, 16, 31, 210], backgroundPadding: [5, 3],
     })]);
     const wet = stations.filter((s: any) => rainVal(s, metric) > 0).length;
-    setRainInfo(`${metric === "24h" ? "近24小時" : "近1小時"}雨量　全台 ${stations.length} 站、其中 ${wet} 站有雨${rainTimeRef.current ? `　觀測 ${rainTimeRef.current.slice(11, 16)}` : ""}`);
+    const maxV = stations.reduce((a: number, s: any) => Math.max(a, rainVal(s, metric)), 0);
+    setRainInfo(`${metric === "24h" ? "近24小時" : "近1小時"}雨量　全台 ${stations.length} 站、其中 ${wet} 站有雨${maxV > 0 ? `　最大 ${Math.round(maxV)}mm` : ""}${rainTimeRef.current ? `　觀測 ${rainTimeRef.current.slice(11, 16)}` : ""}\n柱高與雨量成正比(${rainScale(metric)}m/mm 誇張倍率)`);
   }
   function setRainModeAndRender(metric: "1h" | "24h") { rainModeRef.current = metric; setRainMode(metric); renderRain(metric); }
   async function toggleRain() {
@@ -483,18 +505,18 @@ export default function App() {
       if (!m.getSource("rain")) {
         m.addSource("rain", { type: "geojson", data: rainHexFC(stations, metric), generateId: true });
         m.addSource("rain-dot", { type: "geojson", data: rainDotFC(stations, metric) });
-        m.addLayer({ id: "rain-dot", type: "circle", source: "rain-dot", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 1.6, 11, 3.2], "circle-color": ["interpolate", ["linear"], ["get", "v"], 0, "rgba(120,140,160,0.5)", 0.5, "#9ecae1", 10, "#4292c6", 40, "#08519c"], "circle-stroke-width": 0 } });
+        m.addLayer({ id: "rain-dot", type: "circle", source: "rain-dot", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 1.6, 11, 3.2], "circle-color": ["interpolate", ["linear"], ["get", "v"], ...rainDotStops(metric)] as any, "circle-stroke-width": 0 } });
         m.addLayer({
           id: "rain-col", type: "fill-extrusion", source: "rain",
           paint: {
-            "fill-extrusion-color": ["case", ["boolean", ["feature-state", "hover"], false], "#ffffff", ["interpolate", ["linear"], ["get", "r1"], 0, "#bcd9ff", 5, "#6baed6", 15, "#2171b5", 40, "#08306b"]],
-            "fill-extrusion-height": ["*", ["min", ["get", "r1"], 80], RAIN_H],
+            "fill-extrusion-color": ["case", ["boolean", ["feature-state", "hover"], false], "#ffffff", ["interpolate", ["linear"], ["get", "r1"], ...rainColorStops(metric)]] as any,
+            "fill-extrusion-height": ["*", ["min", ["get", "r1"], rainCap(metric)], rainScale(metric)] as any,
             "fill-extrusion-base": 0, "fill-extrusion-opacity": 0.8,
           },
         });
         m.on("mousemove", "rain-col", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
-          const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + Math.min(p.r1, 80) * RAIN_H;
+          const z = ((m.queryTerrainElevation([p.cx, p.cy], { exaggerated: true }) as number) || 0) + rainColH(rainModeRef.current, p.r1);
           setDeckLayers("hover", [hoverTip(p.cx, p.cy, z, `${p.name} ${p.r1}mm`)]);
           if (hoverIdRef.current.rain != null && hoverIdRef.current.rain !== f.id) m.setFeatureState({ source: "rain", id: hoverIdRef.current.rain }, { hover: false });
           hoverIdRef.current.rain = f.id; m.setFeatureState({ source: "rain", id: f.id }, { hover: true });
@@ -1482,7 +1504,7 @@ export default function App() {
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
         {riversInfo && <div className="li">{riversInfo}</div>}
-        {rainInfo && <div className="li">{rainInfo}</div>}
+        {rainInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{rainInfo}</div>}
         {quakeInfo && <div className="li">{quakeInfo}</div>}
         {tempInfo && <div className="li">{tempInfo}</div>}
         {typhoonInfo && <div className="li">{typhoonInfo}</div>}
