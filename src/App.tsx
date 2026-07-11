@@ -449,7 +449,10 @@ export default function App() {
       getSize: 13, sizeUnits: "pixels", getColor: [255, 255, 255, 255], billboard: true,
       fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif', characterSet: "auto",
       getTextAnchor: "middle", getAlignmentBaseline: "bottom",
-      background: true, getBackgroundColor: [20, 20, 24, 235], backgroundPadding: [6, 3],
+      background: true, getBackgroundColor: [20, 20, 24, 245], backgroundPadding: [6, 3],
+      // 關閉深度測試 → 矮柱的提示不會被前方高柱遮住，永遠畫在最上層
+      parameters: { depthTest: false } as any,
+      getPixelOffset: [0, -6],
     });
   }
   // 多個圖層(雨量標號、地震標號…)共用同一個 deck overlay，用登記表合併
@@ -480,6 +483,7 @@ export default function App() {
       fontFamily: '"Noto Sans TC","Microsoft JhengHei",sans-serif', characterSet: "auto",
       getTextAnchor: "middle", getAlignmentBaseline: "bottom",
       background: true, getBackgroundColor: [6, 16, 31, 210], backgroundPadding: [5, 3],
+      parameters: { depthTest: false } as any, // 標號不被其他柱體遮擋
     })]);
     const wet = stations.filter((s: any) => rainVal(s, metric) > 0).length;
     const maxV = stations.reduce((a: number, s: any) => Math.max(a, rainVal(s, metric)), 0);
