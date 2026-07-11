@@ -911,12 +911,16 @@ export default function App() {
     const idwAll = (pt: number[]) => { let ws = 0, cur = 0, ref = 0; for (const s of st) { const d = Math.hypot(s.lng - pt[0], s.lat - pt[1]); const w = 1 / (d * d + 1e-6); ws += w; cur += w * s.cur_level; ref += w * wallRefOf(s); } return { cur: cur / ws, ref: ref / ws }; };
     const baseF: any[] = [], topF: any[] = [], ptF: any[] = [];
     for (const s of st) {
-      // 站點標籤：現在水量(絕對值 cm) / 分隔線 / 平均水量(絕對值 cm)
-      const curCm = Math.round(Math.abs(Number(s.cur_level)) * 100);
+      // 水利署 waterlevel 是「水位標高(海拔)」，真正的水深 = 水位標高 − 該站零點高程(zero_elev)
+      const z = Number(s.zero_elev);
+      const hasZ = Number.isFinite(z);
+      const curD = hasZ ? Number(s.cur_level) - z : null;
       const hasAvg = s.avg_level != null && s.avg_level !== "" && Number.isFinite(Number(s.avg_level));
-      const avgCm = hasAvg ? Math.round(Math.abs(Number(s.avg_level)) * 100) : null;
-      const lbl = `${curCm}cm\n──────\n${avgCm != null ? avgCm + "cm" : "累積中"}`;
-      ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "", lbl }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
+      const avgD = (hasZ && hasAvg) ? Number(s.avg_level) - z : null;
+      const fmt = (d: number | null) => (d == null ? "—" : `${Math.round(d * 100)}cm`);
+      // 上=現在水深、下=平均水深(絕對值 cm)
+      const lbl = `${fmt(curD)}\n──────\n${avgD != null ? fmt(avgD) : "累積中"}`;
+      ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, curd: curD, avgd: avgD, z: hasZ ? z : null, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "", lbl }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     }
     for (const river of geo) {
       const L = river.coords; if (!L || L.length < 2) continue;
@@ -978,7 +982,15 @@ export default function App() {
           },
           paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 2 },
         });
-        const wallHtml = (p: any) => { const avg = (p.avg != null && p.avg !== "") ? Number(p.avg).toFixed(2) + " m" : "累積中"; const tt = p.t ? String(p.t).replace("T", " ").slice(0, 16) : ""; return `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>即時水量高度 <b>${Number(p.cur).toFixed(2)} m</b><br/>平均水量高度 ${avg}<br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m${tt ? `<br/><span style="opacity:.6;font-size:11px">觀測 ${tt}</span>` : ""}</div>`; };
+        const wallHtml = (p: any) => {
+          const tt = p.t ? String(p.t).replace("T", " ").slice(0, 16) : "";
+          const d = (v: any) => (v == null || v === "" || !Number.isFinite(Number(v))) ? null : Number(v);
+          const curd = d(p.curd), avgd = d(p.avgd);
+          const depthLine = curd != null
+            ? `即時水深 <b>${curd.toFixed(2)} m</b><br/>平均水深 ${avgd != null ? avgd.toFixed(2) + " m" : "累積中"}`
+            : `即時水位標高 <b>${Number(p.cur).toFixed(2)} m</b><br/><span style="opacity:.7">(此站未提供零點高程，無法換算水深)</span>`;
+          return `<div class="qpop"><b>${p.name || ""}</b> ${p.river || ""}<br/>${depthLine}<br/><span style="opacity:.75;font-size:11px">水位標高 ${Number(p.cur).toFixed(2)} m${p.z != null ? `・零點高程 ${Number(p.z).toFixed(2)} m` : ""}</span><br/>警戒 一${p.w1 ?? "-"}/二${p.w2 ?? "-"}/三${p.w3 ?? "-"} m${tt ? `<br/><span style="opacity:.6;font-size:11px">觀測 ${tt}</span>` : ""}</div>`;
+        };
         m.on("mousemove", "ww-pt", (e) => { const f = e.features?.[0]; if (!f) return; m.getCanvas().style.cursor = "pointer"; wallPopRef.current?.remove(); wallPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 8, className: "hover-tip" }).setLngLat((f.geometry as any).coordinates).setHTML(wallHtml(f.properties)).addTo(m); });
         m.on("mouseleave", "ww-pt", () => { m.getCanvas().style.cursor = ""; wallPopRef.current?.remove(); });
       }
