@@ -946,9 +946,11 @@ export default function App() {
       const hasAvg = s.avg_level != null && s.avg_level !== "" && Number.isFinite(Number(s.avg_level));
       const rawAvg = (hasZ && hasAvg) ? Number(s.avg_level) - z : null;
       const avgD = okD(rawAvg) ? rawAvg : null;
-      const fmt = (d: number | null) => (d == null ? "—" : `${Math.round(d * 100)}cm`);
-      // 上=現在水深、下=平均水深(絕對值 cm)
-      const lbl = `${fmt(curD)}\n──────\n${avgD != null ? fmt(avgD) : "累積中"}`;
+      // 多數測站未提供零點高程，水深算不出來；水利署穩定提供的是「水位標高」。
+      // 標籤統一顯示水位標高(m)：上=現在、下=平均，同一基準可直接比較(差值即 3D 水牆高度)。
+      const curLv = Number(s.cur_level);
+      const avgLv = hasAvg ? Number(s.avg_level) : null;
+      const lbl = `${curLv.toFixed(2)}m\n──────\n${avgLv != null ? avgLv.toFixed(2) + "m" : "累積中"}`;
       ptF.push({ type: "Feature", properties: { name: s.name, river: s.river, cur: s.cur_level, avg: s.avg_level, curd: curD, avgd: avgD, z: hasZ ? z : null, w1: s.warn1, w2: s.warn2, w3: s.warn3, t: s.cur_time || "", lbl }, geometry: { type: "Point", coordinates: [s.lng, s.lat] } });
     }
     for (const river of geo) {
