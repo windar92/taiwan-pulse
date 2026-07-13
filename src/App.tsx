@@ -1161,7 +1161,8 @@ export default function App() {
     return stops[stops.length - 1][1];
   }
   function sstImage(points: any[]) {
-    const x0 = 117, x1 = 124, y0 = 20, y1 = 27, step = 0.25;
+    // 大範圍海域 + 0.1° 取樣(對應後端 MUR SST 的 bbox 與 stride)
+    const x0 = 112, x1 = 132, y0 = 14, y1 = 33, step = 0.1;
     const nx = Math.round((x1 - x0) / step) + 1, ny = Math.round((y1 - y0) / step) + 1;
     const grid = new Float32Array(nx * ny).fill(NaN);
     for (const p of points) { const i = Math.round((p.lon - x0) / step), j = Math.round((p.lat - y0) / step); if (i >= 0 && i < nx && j >= 0 && j < ny) grid[j * nx + i] = p.sst; }
@@ -1201,12 +1202,15 @@ export default function App() {
       if (m.getSource("ocean-src")) (m.getSource("ocean-src") as any).updateImage({ url: sh.url });
       else { m.addSource("ocean-src", { type: "image", url: sh.url, coordinates: sh.coords }); m.addLayer({ id: "ocean-sst", type: "raster", source: "ocean-src", paint: { "raster-opacity": 0.7, "raster-resampling": "linear", "raster-fade-duration": 0 } }, m.getLayer("intel-pts") ? "intel-pts" : undefined); }
       m.setLayoutProperty("ocean-sst", "visibility", "visible");
-      // 在海面對應位置標出溫度數值(text-allow-overlap:false 會依縮放自動疏密)
-      const labFC = { type: "FeatureCollection", features: d.points.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { t: Math.round(p.sst) } })) } as any;
+      // 在海面標出溫度數值。點位是 0.1° 網格(數萬點)，只取每 0.5° 一個當標籤，避免爆量
+      const near = (v: number, step: number) => Math.abs(v / step - Math.round(v / step)) < 0.02;
+      const labPts = d.points.filter((p: any) => near(p.lon, 0.5) && near(p.lat, 0.5));
+      const labFC = { type: "FeatureCollection", features: labPts.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { t: p.sst.toFixed(1) } })) } as any;
       if (m.getSource("ocean-lab-src")) (m.getSource("ocean-lab-src") as mapboxgl.GeoJSONSource).setData(labFC);
       else { m.addSource("ocean-lab-src", { type: "geojson", data: labFC }); m.addLayer({ id: "ocean-sst-label", type: "symbol", source: "ocean-lab-src", layout: { "text-field": ["concat", ["to-string", ["get", "t"]], "°"], "text-size": ["interpolate", ["linear"], ["zoom"], 5, 9, 9, 13], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 1.4 } }); }
       m.setLayoutProperty("ocean-sst-label", "visibility", "visible");
-      setOceanOn(true); setOceanInfo(`海表溫度 ${d.date || ""}`);
+      setOceanOn(true);
+      setOceanInfo(`海表溫度 ${d.date || ""}（每日更新）\n來源：NASA JPL MUR SST 1km · NOAA ERDDAP`);
     } catch { setOceanInfo("海溫讀取失敗"); }
   }
 
@@ -1512,7 +1516,7 @@ export default function App() {
         {quakeInfo && <div className="li">{quakeInfo}</div>}
         {tempInfo && <div className="li">{tempInfo}</div>}
         {typhoonInfo && <div className="li">{typhoonInfo}</div>}
-        {oceanInfo && <div className="li">{oceanInfo}</div>}
+        {oceanInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{oceanInfo}</div>}
         {wallInfo && <div className="li">{wallInfo}</div>}
         {shipsInfo && <div className="li">{shipsInfo}</div>}
         {peaksInfo && <div className="li">{peaksInfo}</div>}
