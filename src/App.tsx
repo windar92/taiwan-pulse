@@ -124,6 +124,12 @@ export default function App() {
   const [lakeInfo, setLakeInfo] = useState<string>("");
   const lakeLevelRef = useRef<any>(null);
   const lakePopRef = useRef<mapboxgl.Popup | null>(null);
+  const [coastOn, setCoastOn] = useState(false);
+  const [basinMode, setBasinMode] = useState(0); // 0關 1近1h 2近24h
+  const basinModeRef = useRef(0);
+  const [basinInfo, setBasinInfo] = useState("");
+  const basinGeoRef = useRef<any>(null);
+  const basinPopRef = useRef<mapboxgl.Popup | null>(null);
   const [cctvOn, setCctvOn] = useState(false);
   const [cctvInfo, setCctvInfo] = useState("");
   const cctvPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -397,6 +403,7 @@ export default function App() {
     vis("vis-sat", mode === "vis");
     if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
+    if (coastOn) coastToTop(); // 換底圖後把海陸輪廓線推回最上層
     setBasemap(mode);
   }
   function cycleBasemap() {
@@ -1537,6 +1544,86 @@ export default function App() {
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
   }
+  // ===== 海陸輪廓線(全球海岸線，永遠疊在最上層) =====
+  // 用 Mapbox 向量圖磚的 water 多邊形描邊 → 台灣本島、離島、日本、中國、越南…全球海陸界線都有
+  function ensureCoast() {
+    const m = mapRef.current; if (!m) return;
+    if (!m.getLayer("coast-halo")) {
+      // 深色底線 + 亮色細線，讓輪廓在空照/雲圖等任何底圖上都看得清楚
+      m.addLayer({
+        id: "coast-halo", type: "line", source: "composite", "source-layer": "water",
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: { "line-color": "#04121f", "line-opacity": 0.85, "line-width": ["interpolate", ["linear"], ["zoom"], 2, 2.2, 6, 3.2, 12, 5] },
+      });
+      m.addLayer({
+        id: "coast-line", type: "line", source: "composite", "source-layer": "water",
+        layout: { "line-join": "round", "line-cap": "round", visibility: "none" },
+        paint: { "line-color": "#7CFFCB", "line-opacity": 0.95, "line-width": ["interpolate", ["linear"], ["zoom"], 2, 0.9, 6, 1.4, 12, 2.4] },
+      });
+    }
+  }
+  function coastToTop() {
+    const m = mapRef.current; if (!m) return;
+    for (const id of ["coast-halo", "coast-line"]) if (m.getLayer(id)) m.moveLayer(id); // 移到最上層
+  }
+  function toggleCoast() {
+    const m = mapRef.current; if (!m) return;
+    const on = !coastOn;
+    ensureCoast();
+    for (const id of ["coast-halo", "coast-line"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none");
+    if (on) coastToTop();
+    setCoastOn(on);
+  }
+  // ===== 集水區面積雨量(流域多邊形 choropleth，近1小時/近24小時循環) =====
+  async function cycleBasin() {
+    const m = mapRef.current; if (!m) return;
+    const next = (basinModeRef.current + 1) % 3;
+    basinModeRef.current = next; setBasinMode(next);
+    const ids = ["basin-fill", "basin-line", "basin-label"];
+    if (next === 0) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); basinPopRef.current?.remove(); setBasinInfo(""); return; }
+    try {
+      if (!basinGeoRef.current) {
+        setBasinInfo("集水區雨量載入中…");
+        const [geo, data] = await Promise.all([
+          fetch("/tw-basins.geojson").then((r) => r.json()),
+          fetch("/api/basin?t=" + Math.floor(Date.now() / 300000)).then((r) => r.json()),
+        ]);
+        const byName: any = {}; for (const b of (data.basins || [])) byName[b.name || b.id] = b;
+        for (const f of geo.features) { const b = byName[f.properties.name] || {}; f.properties.r1 = b.r1 ?? null; f.properties.r24 = b.r24 ?? null; f.properties.nS = b.nStations ?? 0; }
+        basinGeoRef.current = { geo, time: data.time };
+      }
+      const { geo, time } = basinGeoRef.current;
+      const metric = next === 2 ? "r24" : "r1";
+      const stops1: any[] = [0, "#e8f4ff", 2, "#9ecae1", 8, "#4292c6", 20, "#2171b5", 50, "#08306b"];
+      const stops24: any[] = [0, "#e8f4ff", 30, "#9ecae1", 100, "#4292c6", 200, "#2171b5", 400, "#08306b"];
+      const fillColor: any = ["case", ["==", ["coalesce", ["get", metric], -1], -1], "rgba(120,130,140,0.25)",
+        ["interpolate", ["linear"], ["get", metric], ...(metric === "r24" ? stops24 : stops1)]];
+      if (m.getSource("basin-src")) (m.getSource("basin-src") as mapboxgl.GeoJSONSource).setData(geo);
+      else {
+        m.addSource("basin-src", { type: "geojson", data: geo });
+        const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+        m.addLayer({ id: "basin-fill", type: "fill", source: "basin-src", paint: { "fill-color": fillColor, "fill-opacity": 0.55 } }, beforeId);
+        m.addLayer({ id: "basin-line", type: "line", source: "basin-src", paint: { "line-color": "#cfe8ff", "line-width": 1, "line-opacity": 0.7 } }, beforeId);
+        m.addLayer({ id: "basin-label", type: "symbol", source: "basin-src", layout: { "text-field": ["get", "name"], "text-size": ["interpolate", ["linear"], ["zoom"], 6, 11, 10, 15], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "#08243b", "text-halo-width": 1.8 } });
+        m.on("mousemove", "basin-fill", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          m.getCanvas().style.cursor = "pointer";
+          const v1 = p.r1 == null || p.r1 === "" ? "—" : `${Number(p.r1).toFixed(1)} mm`;
+          const v24 = p.r24 == null || p.r24 === "" ? "—" : `${Number(p.r24).toFixed(1)} mm`;
+          basinPopRef.current?.remove();
+          basinPopRef.current = new mapboxgl.Popup({ closeButton: false, offset: 6, className: "hover-tip", maxWidth: "240px" }).setLngLat(e.lngLat).setHTML(
+            `<div class="qpop"><b>${p.name}集水區</b><br/>近1小時面積雨量 <b>${v1}</b><br/>近24小時面積雨量 <b>${v24}</b><br/><span style="opacity:.6;font-size:11px">流域內雨量站 ${p.nS || 0} 站，面積平均</span></div>`
+          ).addTo(m);
+        });
+        m.on("mouseleave", "basin-fill", () => { m.getCanvas().style.cursor = ""; basinPopRef.current?.remove(); });
+      }
+      m.setPaintProperty("basin-fill", "fill-color", fillColor);
+      // 標籤顯示流域名 + 目前指標數值
+      m.setLayoutProperty("basin-label", "text-field", ["case", ["==", ["coalesce", ["get", metric], -1], -1], ["get", "name"], ["concat", ["get", "name"], "\n", ["to-string", ["round", ["get", metric]]], "mm"]] as any);
+      for (const id of ids) m.setLayoutProperty(id, "visibility", "visible");
+      setBasinInfo(`集水區${next === 2 ? "近24小時" : "近1小時"}面積雨量　26 條中央管河川流域${time ? `　${String(time).slice(11, 16)}` : ""}\n※流域界線為 MERIT-Basins 推估，平原河川略有誤差`);
+    } catch { setBasinInfo("集水區雨量載入失敗"); }
+  }
   // ===== 公路即時影像 CCTV(公路局，點擊看即時快照) =====
   async function toggleCctv() {
     const m = mapRef.current; if (!m) return;
@@ -1670,9 +1757,12 @@ export default function App() {
       <button className="layer-toggle" onClick={() => setMenuOpen((o) => !o)} title="圖層選單：開關各資料圖層">
         {menuOpen ? "✕ 圖層" : "☰ 圖層"}
       </button>
+      {menuOpen && (
+        <button className={"coast-btn" + (coastOn ? " on" : "")} onClick={toggleCoast} title="海陸輪廓線：把全球海岸線(台灣/離島/日本/中國/越南…)以亮線疊在最上層">{coastOn ? "輪廓 ✓" : "輪廓"}</button>
+      )}
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
-        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖(向日葵Himawari每10分) → 衛星空照圖(VIIRS真彩每日)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap}title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖(向日葵Himawari每10分) → 衛星空照圖(VIIRS真彩每日)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
@@ -1687,6 +1777,7 @@ export default function App() {
         <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="公路即時影像(公路局)：點擊看即時畫面">公路影像</button>
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
+        <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
       </div>
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
@@ -1704,6 +1795,7 @@ export default function App() {
         {cctvInfo && <div className="li">{cctvInfo}</div>}
         {currentsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{currentsInfo}</div>}
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
+        {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
       </div>
       {newsOpen && (
         <div className="news-panel">
