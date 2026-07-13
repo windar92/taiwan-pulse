@@ -368,9 +368,10 @@ export default function App() {
   function ensureVis() {
     const m = mapRef.current; if (!m) return;
     const date = visDate();
-    const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+    // NOAA-20/VIIRS 真彩(Suomi-NPP 近期日期常有缺，NOAA-20 較穩定即時)
+    const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_NOAA20_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
     const build = () => {
-      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS · Suomi NPP/VIIRS" });
+      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS · NOAA-20/VIIRS" });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
       m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": 1 } }, beforeId);
       visModeRef.current = date as any;
@@ -381,7 +382,7 @@ export default function App() {
       if (m.getSource("vis-src")) m.removeSource("vis-src");
       build();
     }
-    setGibsInfo(`衛星空照圖　來源：Suomi NPP / VIIRS 可見光真彩(Corrected Reflectance) · NASA GIBS\n影像日期：${date}（極軌衛星每日過境一次；夜間無可見光，故非逐時更新）`);
+    setGibsInfo(`衛星空照圖　來源：NOAA-20 / VIIRS 可見光真彩(Corrected Reflectance) · NASA GIBS\n影像日期：${date}（極軌衛星每日過境一次；夜間無可見光，故非逐時更新）`);
   }
   function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis") {
     const m = mapRef.current; if (!m) return;
