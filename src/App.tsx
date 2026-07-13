@@ -403,7 +403,13 @@ export default function App() {
     vis("vis-sat", mode === "vis");
     if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
-    if (coastOn) coastToTop(); // 換底圖後把海陸輪廓線推回最上層
+    // 海陸輪廓線只用於「紅外雲圖 / 衛星空照圖」這兩種看不出海陸界線的底圖；
+    // 其餘底圖自動隱藏(狀態保留，切回雲圖/空照時自動恢復)。
+    const coastable = mode === "gibs" || mode === "vis";
+    const showCoast = coastOn && coastable;
+    vis("coast-halo", showCoast);
+    vis("coast-line", showCoast);
+    if (showCoast) coastToTop(); // 換底圖後把海陸輪廓線推回最上層
     setBasemap(mode);
   }
   function cycleBasemap() {
@@ -1624,35 +1630,59 @@ export default function App() {
       setBasinInfo(`集水區${next === 2 ? "近24小時" : "近1小時"}面積雨量　26 條中央管河川流域${time ? `　${String(time).slice(11, 16)}` : ""}\n※流域界線為 MERIT-Basins 推估，平原河川略有誤差`);
     } catch { setBasinInfo("集水區雨量載入失敗"); }
   }
-  // ===== 公路即時影像 CCTV(公路局，點擊看即時快照) =====
+  // ===== 即時影像(多來源：國道/省道/河川/路口淹水；點擊看即時快照) =====
+  // 資料源 /api/cams：公路局(省道) + 高公局(國道，官方服務時常中斷) + 水利署民生公共物聯網(河川/淹水)
+  const CAM_CAT_COLOR: Record<string, string> = {
+    freeway: "#ff7043",   // 國道 橘
+    highway: "#ffd54f",   // 省道 黃
+    river: "#4fc3f7",     // 河川/水利 藍
+    flood: "#ab47bc",     // 路口淹水 紫
+  };
+  const CAM_CAT_NAME: Record<string, string> = { freeway: "國道", highway: "省道", river: "河川", flood: "淹水" };
   async function toggleCctv() {
     const m = mapRef.current; if (!m) return;
     const on = !cctvOn;
-    if (!on) { for (const id of ["cctv-pt"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); cctvPopRef.current?.remove(); setCctvOn(false); setCctvInfo(""); return; }
-    setCctvOn(true); setCctvInfo("公路影像載入中…");
+    if (!on) { if (m.getLayer("cctv-pt")) m.setLayoutProperty("cctv-pt", "visibility", "none"); cctvPopRef.current?.remove(); setCctvOn(false); setCctvInfo(""); return; }
+    setCctvOn(true); setCctvInfo("即時影像載入中…");
     try {
-      const d = await fetch("/api/live?ds=cctv").then((r) => r.json());
-      if (!d.ok || !(d.cams || []).length) { setCctvInfo("公路影像暫無"); return; }
-      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, road: c.road, dir: c.dir, mile: c.mile, desc: c.desc, img: c.img } })) } as any;
+      const d = await fetch("/api/cams").then((r) => r.json());
+      if (!d.ok || !(d.cams || []).length) { setCctvInfo("即時影像暫無"); return; }
+      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, cat: c.cat, name: c.name, desc: c.desc, img: c.img, src: c.src } })) } as any;
       if (m.getSource("cctv-src")) (m.getSource("cctv-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("cctv-src", { type: "geojson", data: fc });
-        m.addLayer({ id: "cctv-pt", type: "circle", source: "cctv-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.4, 12, 5], "circle-color": "#ffd54f", "circle-stroke-width": 1, "circle-stroke-color": "#5a4300", "circle-opacity": 0.9 } });
+        m.addLayer({
+          id: "cctv-pt", type: "circle", source: "cctv-src",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.2, 12, 5],
+            "circle-color": ["match", ["get", "cat"],
+              "freeway", CAM_CAT_COLOR.freeway,
+              "highway", CAM_CAT_COLOR.highway,
+              "river", CAM_CAT_COLOR.river,
+              "flood", CAM_CAT_COLOR.flood,
+              "#bdbdbd"],
+            "circle-stroke-width": 1, "circle-stroke-color": "#20160a", "circle-opacity": 0.9,
+          },
+        });
         m.on("mouseenter", "cctv-pt", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "cctv-pt", () => { m.getCanvas().style.cursor = ""; });
         m.on("click", "cctv-pt", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
           cctvPopRef.current?.remove();
           const src = p.img ? `${p.img}${p.img.includes("?") ? "&" : "?"}t=${Math.floor(Date.now() / 20000)}` : "";
-          const imgHtml = src ? `<img src="${src}" style="width:280px;max-width:70vw;border-radius:6px;margin-top:5px" onerror="this.style.display='none'"/>` : "";
+          const imgHtml = src ? `<img src="${src}" style="width:280px;max-width:70vw;border-radius:6px;margin-top:5px" onerror="this.replaceWith(Object.assign(document.createElement('div'),{textContent:'（此鏡頭目前取不到畫面）',style:'opacity:.6;font-size:11px;margin-top:5px'}))"/>` : "";
+          const tag = CAM_CAT_NAME[p.cat] || "";
+          const col = CAM_CAT_COLOR[p.cat] || "#bdbdbd";
           cctvPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "300px" }).setLngLat((f.geometry as any).coordinates).setHTML(
-            `<div class="qpop"><b>${p.road || ""} ${p.mile || ""}</b><br/><span style="opacity:.85">${p.desc || ""}</span>${imgHtml}<br/><span style="opacity:.6;font-size:11px">公路局公路即時影像·約20秒更新</span></div>`
+            `<div class="qpop"><b><span style="color:${col}">●</span> ${p.name || ""}</b> <span style="opacity:.6;font-size:11px">${tag}</span><br/><span style="opacity:.85">${p.desc || ""}</span>${imgHtml}<br/><span style="opacity:.6;font-size:11px">${p.src || ""}</span></div>`
           ).addTo(m);
         });
       }
       m.setLayoutProperty("cctv-pt", "visibility", "visible");
-      setCctvInfo(`公路即時影像 ${d.cams.length} 支(公路局)　點擊看即時畫面`);
-    } catch { setCctvInfo("公路影像載入失敗"); }
+      const parts = (d.cats || []).map((c: any) => `${c.label} ${c.count}`).join("　");
+      const dead = (d.feeds || []).filter((f: any) => !f.ok).map((f: any) => f.name.replace(/\(.*/, ""));
+      setCctvInfo(`即時影像 ${d.count} 支　${parts}　點擊看即時畫面${dead.length ? `　※${dead.join("、")}官方服務目前中斷` : ""}`);
+    } catch { setCctvInfo("即時影像載入失敗"); }
   }
   // ===== 即時海流(NRT 地轉流，箭頭) =====
   async function toggleCurrents() {
@@ -1757,8 +1787,8 @@ export default function App() {
       <button className="layer-toggle" onClick={() => setMenuOpen((o) => !o)} title="圖層選單：開關各資料圖層">
         {menuOpen ? "✕ 圖層" : "☰ 圖層"}
       </button>
-      {menuOpen && (
-        <button className={"coast-btn" + (coastOn ? " on" : "")} onClick={toggleCoast} title="海陸輪廓線：把全球海岸線(台灣/離島/日本/中國/越南…)以亮線疊在最上層">{coastOn ? "輪廓 ✓" : "輪廓"}</button>
+      {menuOpen && (basemap === "gibs" || basemap === "vis") && (
+        <button className={"coast-btn" + (coastOn ? " on" : "")} onClick={toggleCoast} title="海陸輪廓線：把全球海岸線(台灣/離島/日本/中國/越南…)以亮線疊在最上層。僅在紅外雲圖/衛星空照圖底圖時可用">{coastOn ? "輪廓 ✓" : "輪廓"}</button>
       )}
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
@@ -1774,7 +1804,7 @@ export default function App() {
         <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
         <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):馬太鞍溪/萬里溪為真實湖體">堰塞湖</button>
         <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
-        <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="公路即時影像(公路局)：點擊看即時畫面">公路影像</button>
+        <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="即時影像：國道(高公局)橘、省道(公路局)黃、河川(水利署)藍、路口淹水紫。點擊看即時畫面">即時影像</button>
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
