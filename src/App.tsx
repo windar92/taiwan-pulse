@@ -1179,12 +1179,16 @@ export default function App() {
       const v: (number | null)[] = g.vals;
       const v00 = v[j0 * g.nx + i0], v10 = v[j0 * g.nx + i0 + 1];
       const v01 = v[(j0 + 1) * g.nx + i0], v11 = v[(j0 + 1) * g.nx + i0 + 1];
-      if (v00 == null || v10 == null || v01 == null || v11 == null) {
-        // 靠岸格：退回最近有效值，避免海岸邊出現破洞
-        const near = [v00, v10, v01, v11].filter((x) => x != null) as number[];
-        return near.length ? near[0] : null;
-      }
-      return (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
+      // 以雙線性權重做「有效值加權平均」：靠岸格自然平滑，幾乎全是陸地的格則透明。
+      // (舊寫法直接取最近有效值 → 會在陸地邊緣產生一格一格的平坦方塊)
+      let sum = 0, wsum = 0;
+      const w00 = (1 - tx) * (1 - ty), w10 = tx * (1 - ty), w01 = (1 - tx) * ty, w11 = tx * ty;
+      if (v00 != null) { sum += v00 * w00; wsum += w00; }
+      if (v10 != null) { sum += v10 * w10; wsum += w10; }
+      if (v01 != null) { sum += v01 * w01; wsum += w01; }
+      if (v11 != null) { sum += v11 * w11; wsum += w11; }
+      if (wsum < 0.5) return null; // 過半為陸地 → 不上色
+      return sum / wsum;
     };
     // 台灣近海優先用 0.1° 細網格，其餘用 0.2° 粗網格
     const sample = (lon: number, lat: number): number | null => {
@@ -1212,6 +1216,13 @@ export default function App() {
       }
     }
     ctx.putImageData(img, 0, 0);
+    // 輕微模糊，柔化 0.2° 網格的方格邊界
+    const tmp = document.createElement("canvas"); tmp.width = W; tmp.height = H;
+    tmp.getContext("2d")!.drawImage(cv, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    ctx.filter = "blur(2px)";
+    ctx.drawImage(tmp, 0, 0);
+    ctx.filter = "none";
     // 依真實海岸線把陸地上的色彩精準挖掉(台灣本島/離島；其餘陸地在 MUR 本來就是 null)
     const geo = countyGeoRef.current;
     if (geo?.features) {
