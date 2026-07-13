@@ -102,19 +102,34 @@ async function quake(key) {
   return { ok: true, count: uniq.length, quakes: uniq.slice(0, 150) };
 }
 
-// ---- 海溫 台大 ODB ----
+// ---- 海溫：NOAA ERDDAP 的 NASA JPL MUR SST(全球 0.01°、每日、免金鑰) ----
+// 舊版用台大 ODB 的 mhw 端點,那是「月」資料(畫面上會顯示一兩個月前的日期),不是即時。
+// MUR 為每日海表溫度分析,陸地為 null(天生不會蓋到陸地)。取大範圍海域 + 0.1° 取樣。
+const SST_BBOX = { lon0: 112, lon1: 132, lat0: 14, lat1: 33 }; // 大範圍海域(含台灣、巴士海峽、東海、南海北部)
 async function ocean() {
-  const now = new Date();
-  const first = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-  const back = new Date(now.getFullYear(), now.getMonth() - 2, 1);
-  const url = `https://eco.odb.ntu.edu.tw/api/mhw?lon0=117&lon1=124&lat0=20&lat1=27&start=${first(back)}&end=${first(now)}&append=sst,sst_anomaly,level`;
+  // MUR 原生 0.01°，stride 10 → 約 0.1° 一點
+  const q = `analysed_sst[(last)][(${SST_BBOX.lat0}):10:(${SST_BBOX.lat1})][(${SST_BBOX.lon0}):10:(${SST_BBOX.lon1})]`;
+  const url = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41.json?${encodeURIComponent(q)}`;
   const r = await fetch(url, { headers: UA });
-  if (!r.ok) throw new Error(`ODB ${r.status}`);
-  const arr = await r.json();
-  if (!Array.isArray(arr) || !arr.length) return { ok: true, date: null, points: [] };
-  let latest = ""; for (const p of arr) if (p.date > latest) latest = p.date;
-  const points = arr.filter((p) => p.date === latest && p.sst != null).map((p) => ({ lon: p.lon, lat: p.lat, sst: p.sst, anom: p.sst_anomaly, level: p.level }));
-  return { ok: true, date: latest, count: points.length, points };
+  if (!r.ok) throw new Error(`ERDDAP ${r.status}`);
+  const j = await r.json();
+  const cols = j?.table?.columnNames || [];
+  const rows = j?.table?.rows || [];
+  const iT = cols.indexOf("time"), iLat = cols.indexOf("latitude"), iLon = cols.indexOf("longitude"), iV = cols.indexOf("analysed_sst");
+  if (iV < 0 || !rows.length) return { ok: true, date: null, points: [] };
+  let date = null;
+  const points = [];
+  for (const row of rows) {
+    const v = row[iV];
+    if (v == null) continue; // 陸地/缺值
+    let sst = Number(v);
+    if (!Number.isFinite(sst)) continue;
+    if (sst > 100) sst -= 273.15; // 保險：若回傳為 Kelvin
+    if (sst < -5 || sst > 40) continue;
+    if (date == null && iT >= 0) date = String(row[iT] || "").slice(0, 10);
+    points.push({ lon: Number(row[iLon]), lat: Number(row[iLat]), sst: +sst.toFixed(2) });
+  }
+  return { ok: true, date, count: points.length, source: "NASA JPL MUR SST (每日) via NOAA ERDDAP", bbox: SST_BBOX, points };
 }
 
 // ---- 山岳 OSM Overpass(主要供產生 public/peaks.json) ----
