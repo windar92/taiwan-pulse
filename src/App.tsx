@@ -70,7 +70,7 @@ export default function App() {
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis">("dark");
   const [gibsInfo, setGibsInfo] = useState<string>("");
-  const visModeRef = useRef<"day" | "night" | "">("");
+  const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
   const [satOn, setSatOn] = useState(false);
   const [sel, setSel] = useState<Sel | null>(null);
@@ -357,37 +357,31 @@ export default function App() {
     m.addLayer({ id: "gibs-sat", type: "raster", source: "gibs-sat", paint: { "raster-opacity": 0.82 } }, beforeId);
     setGibsInfo(`紅外雲圖　來源：向日葵九號(Himawari-9) 清晰紅外(Band13) · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像，每10分鐘更新、約30–60分延遲)`);
   }
-  // 台灣是否日間(以太陽在台灣約 121E,23.5N 是否在地平線上概略判斷,決定衛星雲圖用可見光或紅外)
-  function twIsDay() {
-    const tw = new Date(Date.now() + 8 * 3600 * 1000);
-    const h = tw.getUTCHours() + tw.getUTCMinutes() / 60;
-    return h >= 6 && h < 18; // 台灣約 06–18 時為日間,可見光有影像
+  // 衛星空照圖：VIIRS 可見光「真彩」(Corrected Reflectance True Color)
+  // 這是真正「從太空往下看」的實景影像：地面是真實顏色、雲系是白的、颱風眼看得到。
+  // 註：向日葵(10分鐘)沒有可用的真彩來源 —— NASA GIBS 的 GeoColor 只有 GOES(美洲)，
+  //     亞洲這邊只能拿到紅外(假色)。真彩只有極軌衛星 VIIRS/MODIS，每天過境一次。
+  function visDate() {
+    const d = new Date(Date.now() - 24 * 3600 * 1000); // 取前一日(當日影像常還沒處理完)
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
   }
-  // 衛星雲圖：日間用向日葵可見光(Band3,真實視覺)、夜間自動改用紅外(Band13),讓任何時間都看得到雲系
   function ensureVis() {
     const m = mapRef.current; if (!m) return;
-    const day = twIsDay();
-    const layerName = day ? "Himawari_AHI_Band3_Red_Visible_1km" : "Himawari_AHI_Band13_Clean_Infrared";
-    const tms = day ? "GoogleMapsCompatible_Level7" : "GoogleMapsCompatible_Level6";
-    const mz = day ? 7 : 6;
-    const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/${layerName}/default/default/${tms}/{z}/{y}/{x}.png`;
-    if (!m.getLayer("vis-sat")) {
-      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: mz, attribution: "JMA Himawari-9 / NASA GIBS" });
+    const date = visDate();
+    const url = `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_SNPP_CorrectedReflectance_TrueColor/default/${date}/GoogleMapsCompatible_Level9/{z}/{y}/{x}.jpg`;
+    const build = () => {
+      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: 9, attribution: "NASA EOSDIS GIBS · Suomi NPP/VIIRS" });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": day ? 1 : 0.82 } }, beforeId);
-      visModeRef.current = day ? "day" : "night";
-    } else if (visModeRef.current !== (day ? "day" : "night")) {
-      // 日夜狀態改變 → 重建來源
+      m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": 1 } }, beforeId);
+      visModeRef.current = date as any;
+    };
+    if (!m.getLayer("vis-sat")) build();
+    else if ((visModeRef.current as any) !== date) {
       if (m.getLayer("vis-sat")) m.removeLayer("vis-sat");
       if (m.getSource("vis-src")) m.removeSource("vis-src");
-      m.addSource("vis-src", { type: "raster", tiles: [url], tileSize: 256, maxzoom: mz, attribution: "JMA Himawari-9 / NASA GIBS" });
-      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "vis-sat", type: "raster", source: "vis-src", paint: { "raster-opacity": day ? 1 : 0.82 } }, beforeId);
-      visModeRef.current = day ? "day" : "night";
+      build();
     }
-    setGibsInfo(day
-      ? `衛星雲圖　來源：向日葵九號(Himawari-9) 可見光真彩(Band3) · NASA GIBS 重投影\n資料時間：約 ${himawariTime()} 前後(台灣時間，日間可見光實景，最新可用影像)`
-      : `衛星雲圖（夜間）　夜間無反射光,自動改用向日葵九號 紅外(Band13)顯示雲系 · NASA GIBS\n資料時間：約 ${himawariTime()} 前後(台灣時間，最新可用影像)`);
+    setGibsInfo(`衛星空照圖　來源：Suomi NPP / VIIRS 可見光真彩(Corrected Reflectance) · NASA GIBS\n影像日期：${date}（極軌衛星每日過境一次；夜間無可見光，故非逐時更新）`);
   }
   function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis") {
     const m = mapRef.current; if (!m) return;
@@ -1638,7 +1632,7 @@ export default function App() {
       setPlaInfo(`解放軍基地及設施 ${d.pts.length} 處（社群 OSINT·非官方）\n色：雷達/機場/海軍/飛彈/電子/基地`);
     } catch { setPlaInfo("解放軍設施載入失敗"); }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星雲圖" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -1677,7 +1671,7 @@ export default function App() {
       </button>
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
-        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖 → 衛星雲圖(向日葵九號 Himawari-9 · NASA GIBS，衛星雲圖日間可見光/夜間紅外)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap} title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖(向日葵Himawari每10分) → 衛星空照圖(VIIRS真彩每日)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
