@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
-import { TextLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { TextLayer, SolidPolygonLayer, LineLayer } from "@deck.gl/layers";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 const HOME_KEY = "tp-home";
@@ -124,6 +124,14 @@ export default function App() {
   const [lakeInfo, setLakeInfo] = useState<string>("");
   const lakeLevelRef = useRef<any>(null);
   const lakePopRef = useRef<mapboxgl.Popup | null>(null);
+  const [cctvOn, setCctvOn] = useState(false);
+  const [cctvInfo, setCctvInfo] = useState("");
+  const cctvPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [currentsOn, setCurrentsOn] = useState(false);
+  const [currentsInfo, setCurrentsInfo] = useState("");
+  const [plaOn, setPlaOn] = useState(false);
+  const [plaInfo, setPlaInfo] = useState("");
+  const plaPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gzOn, setGzOn] = useState(false);
   const gzPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gzFrom, setGzFrom] = useState(0);
@@ -677,6 +685,7 @@ export default function App() {
     w(rainOn, toggleRain); w(quakeOn, toggleQuake); w(tempOn, toggleTemp); w(staOn, toggleSta);
     w(typhoonOn, toggleTyphoon); w(oceanOn, toggleOcean); w(shipsOn, toggleShips);
     w(peaksOn, togglePeaks); w(lakeOn, toggleLake); w(gzOn, toggleGrayZone);
+    w(cctvOn, toggleCctv); w(currentsOn, toggleCurrents); w(plaOn, togglePla);
     if (on && riverModeRef.current === 0) cycleRiver();
     if (!on && riverModeRef.current > 0) { if (wallOn) toggleWaterWall(); if (riversOn) toggleRivers(); riverModeRef.current = 0; setRiverMode(0); }
   }
@@ -1533,6 +1542,102 @@ export default function App() {
       setQuakeOn(true); setQuakeInfo("");
     } catch { setQuakeInfo("地震讀取失敗"); }
   }
+  // ===== 公路即時影像 CCTV(公路局，點擊看即時快照) =====
+  async function toggleCctv() {
+    const m = mapRef.current; if (!m) return;
+    const on = !cctvOn;
+    if (!on) { for (const id of ["cctv-pt"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); cctvPopRef.current?.remove(); setCctvOn(false); setCctvInfo(""); return; }
+    setCctvOn(true); setCctvInfo("公路影像載入中…");
+    try {
+      const d = await fetch("/api/live?ds=cctv").then((r) => r.json());
+      if (!d.ok || !(d.cams || []).length) { setCctvInfo("公路影像暫無"); return; }
+      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, road: c.road, dir: c.dir, mile: c.mile, desc: c.desc, img: c.img } })) } as any;
+      if (m.getSource("cctv-src")) (m.getSource("cctv-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("cctv-src", { type: "geojson", data: fc });
+        m.addLayer({ id: "cctv-pt", type: "circle", source: "cctv-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.4, 12, 5], "circle-color": "#ffd54f", "circle-stroke-width": 1, "circle-stroke-color": "#5a4300", "circle-opacity": 0.9 } });
+        m.on("mouseenter", "cctv-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "cctv-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "cctv-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          cctvPopRef.current?.remove();
+          const src = p.img ? `${p.img}${p.img.includes("?") ? "&" : "?"}t=${Math.floor(Date.now() / 20000)}` : "";
+          const imgHtml = src ? `<img src="${src}" style="width:280px;max-width:70vw;border-radius:6px;margin-top:5px" onerror="this.style.display='none'"/>` : "";
+          cctvPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "300px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.road || ""} ${p.mile || ""}</b><br/><span style="opacity:.85">${p.desc || ""}</span>${imgHtml}<br/><span style="opacity:.6;font-size:11px">公路局公路即時影像·約20秒更新</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("cctv-pt", "visibility", "visible");
+      setCctvInfo(`公路即時影像 ${d.cams.length} 支(公路局)　點擊看即時畫面`);
+    } catch { setCctvInfo("公路影像載入失敗"); }
+  }
+  // ===== 即時海流(NRT 地轉流，箭頭) =====
+  async function toggleCurrents() {
+    const m = mapRef.current; if (!m) return;
+    const on = !currentsOn;
+    if (!on) { setDeckLayers("currents", []); setCurrentsOn(false); setCurrentsInfo(""); return; }
+    setCurrentsOn(true); setCurrentsInfo("海流載入中…");
+    try {
+      const d = await fetch("/api/live?ds=currents").then((r) => r.json());
+      if (!d.ok || !(d.vecs || []).length) { setCurrentsInfo("海流資料暫無"); return; }
+      const K = 0.6; // 箭頭長度倍率(度/(m/s))
+      const shafts: any[] = [], heads: any[] = [];
+      const col = (s: number): [number, number, number] => {
+        const t = Math.min(s / 1.2, 1);
+        return [Math.round(90 + 165 * t), Math.round(180 - 120 * t), Math.round(255 - 200 * t)];
+      };
+      for (const v of d.vecs) {
+        const len = Math.min(v.s, 1.5) * K;
+        const ang = Math.atan2(v.v, v.u);
+        const cosL = Math.max(0.2, Math.cos((v.lat * Math.PI) / 180));
+        const ex = v.lon + (len * Math.cos(ang)) / cosL, ey = v.lat + len * Math.sin(ang);
+        const c = col(v.s);
+        shafts.push({ s: [v.lon, v.lat], t: [ex, ey], c });
+        // 兩根倒刺
+        const bl = len * 0.32;
+        for (const da of [Math.PI * 0.82, -Math.PI * 0.82]) {
+          const bx = ex + (bl * Math.cos(ang + da)) / cosL, by = ey + bl * Math.sin(ang + da);
+          heads.push({ s: [ex, ey], t: [bx, by], c });
+        }
+      }
+      setDeckLayers("currents", [
+        new LineLayer({ id: "cur-shaft", data: shafts, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 220], getWidth: 1.4, widthUnits: "pixels" }),
+        new LineLayer({ id: "cur-head", data: heads, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 220], getWidth: 1.4, widthUnits: "pixels" }),
+      ]);
+      setCurrentsOn(true);
+      setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
+    } catch { setCurrentsInfo("海流載入失敗"); }
+  }
+  // ===== 解放軍基地及設施(社群 OSINT，非官方) =====
+  async function togglePla() {
+    const m = mapRef.current; if (!m) return;
+    const on = !plaOn;
+    if (!on) { for (const id of ["pla-pt"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); plaPopRef.current?.remove(); setPlaOn(false); setPlaInfo(""); return; }
+    setPlaOn(true); setPlaInfo("解放軍設施載入中…");
+    try {
+      const d = await fetch("/api/live?ds=pla").then((r) => r.json());
+      if (!d.ok || !(d.pts || []).length) { setPlaInfo("資料暫時無法取得(社群 uMap 常不穩)"); return; }
+      const fc = { type: "FeatureCollection", features: d.pts.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { name: p.name, cat: p.cat } })) } as any;
+      const colorByCat = ["match", ["get", "cat"], "雷達", "#ff5252", "機場/空軍", "#40c4ff", "海軍/港", "#18ffff", "飛彈/火箭軍", "#ff9100", "電子/通信", "#e040fb", "基地/營區", "#ffd740", "#b0bec5"];
+      if (m.getSource("pla-src")) (m.getSource("pla-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("pla-src", { type: "geojson", data: fc });
+        m.addLayer({ id: "pla-pt", type: "circle", source: "pla-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 2.2, 10, 5], "circle-color": colorByCat as any, "circle-stroke-width": 0.7, "circle-stroke-color": "rgba(0,0,0,0.6)", "circle-opacity": 0.9 } });
+        m.on("mouseenter", "pla-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "pla-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "pla-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          plaPopRef.current?.remove();
+          plaPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "260px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.name || ""}</b><br/>類別：${p.cat || "其他"}<br/><span style="opacity:.6;font-size:11px">社群整理·非官方 OSINT，僅供參考</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("pla-pt", "visibility", "visible");
+      setPlaInfo(`解放軍基地及設施 ${d.pts.length} 處（社群 OSINT·非官方）\n色：雷達/機場/海軍/飛彈/電子/基地`);
+    } catch { setPlaInfo("解放軍設施載入失敗"); }
+  }
   const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星雲圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
@@ -1584,6 +1689,9 @@ export default function App() {
         <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
         <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):馬太鞍溪/萬里溪為真實湖體">堰塞湖</button>
         <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
+        <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="公路即時影像(公路局)：點擊看即時畫面">公路影像</button>
+        <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
+        <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
       </div>
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
@@ -1598,6 +1706,9 @@ export default function App() {
         {peaksInfo && <div className="li">{peaksInfo}</div>}
         {lakeInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{lakeInfo}</div>}
         {gzInfo && <div className="li">{gzInfo}</div>}
+        {cctvInfo && <div className="li">{cctvInfo}</div>}
+        {currentsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{currentsInfo}</div>}
+        {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
       </div>
       {newsOpen && (
         <div className="news-panel">

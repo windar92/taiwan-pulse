@@ -424,6 +424,15 @@ body,
 }
 .gz-btn.on { background: #b71c1c; color: #fff; }
 .gz-btn:hover { filter: brightness(1.05); }
+
+.cctv-btn, .currents-btn, .pla-btn {
+  border: none; border-radius: 5px; background: #fff; color: #222;
+  font-size: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); cursor: pointer;
+}
+.cctv-btn.on { background: #b08900; color: #fff; }
+.currents-btn.on { background: #0277bd; color: #fff; }
+.pla-btn.on { background: #6a1b9a; color: #fff; }
+.cctv-btn:hover, .currents-btn:hover, .pla-btn:hover { filter: brightness(1.08); }
 .gz-info {
   position: absolute;
   bottom: 128px;
