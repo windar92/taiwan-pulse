@@ -103,6 +103,8 @@ export default function App() {
   const [typhoonInfo, setTyphoonInfo] = useState<string>("");
   const [oceanOn, setOceanOn] = useState(false);
   const [oceanInfo, setOceanInfo] = useState<string>("");
+  const [oceanMode, setOceanMode] = useState(0); // 0=關 1=色溫底圖 2=色溫底圖+溫度數字
+  const oceanModeRef = useRef(0);
   const [riversOn, setRiversOn] = useState(false);
   const [riversInfo, setRiversInfo] = useState("");
   const riversGeoRef = useRef<any>(null);
@@ -1160,30 +1162,70 @@ export default function App() {
     for (let i = 0; i < stops.length - 1; i++) { const [a, ca] = stops[i], [b, cb] = stops[i + 1]; if (t >= a && t <= b) { const f = (t - a) / (b - a); return [0, 1, 2].map((k) => Math.round(ca[k] + (cb[k] - ca[k]) * f)); } }
     return stops[stops.length - 1][1];
   }
-  function sstImage(points: any[]) {
-    // 大範圍海域 + 0.1° 取樣(對應後端 MUR SST 的 bbox 與 stride)
-    const x0 = 112, x1 = 132, y0 = 14, y1 = 33, step = 0.1;
-    const nx = Math.round((x1 - x0) / step) + 1, ny = Math.round((y1 - y0) / step) + 1;
-    const grid = new Float32Array(nx * ny).fill(NaN);
-    for (const p of points) { const i = Math.round((p.lon - x0) / step), j = Math.round((p.lat - y0) / step); if (i >= 0 && i < nx && j >= 0 && j < ny) grid[j * nx + i] = p.sst; }
-    const small = document.createElement("canvas"); small.width = nx; small.height = ny;
-    const sctx = small.getContext("2d")!; const img = sctx.createImageData(nx, ny);
-    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) { const v = grid[j * nx + i], row = ny - 1 - j, o = (row * nx + i) * 4; if (Number.isNaN(v)) { img.data[o + 3] = 0; continue; } const c = sstColor(v); img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 185; }
-    sctx.putImageData(img, 0, 0);
+  // 麥卡托 y 與其反函數(image source 是以麥卡托線性貼圖，跨大緯度必須照麥卡托列距取樣，否則會嚴重錯位)
+  const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
+  const invMercY = (y: number) => ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
+
+  function sstImage(d: any) {
+    const coarse = d.coarse, fine = d.fine;
+    const x0 = coarse.lon0, x1 = coarse.lon1, y0 = coarse.lat0, y1 = coarse.lat1;
+    // 對單一網格做雙線性取樣(j 由南往北)
+    const sampleGrid = (g: any, lon: number, lat: number): number | null => {
+      if (!g) return null;
+      const fx = (lon - g.lon0) / g.step, fy = (lat - g.lat0) / g.step;
+      const i0 = Math.floor(fx), j0 = Math.floor(fy);
+      if (i0 < 0 || j0 < 0 || i0 + 1 >= g.nx || j0 + 1 >= g.ny) return null;
+      const tx = fx - i0, ty = fy - j0;
+      const v: (number | null)[] = g.vals;
+      const v00 = v[j0 * g.nx + i0], v10 = v[j0 * g.nx + i0 + 1];
+      const v01 = v[(j0 + 1) * g.nx + i0], v11 = v[(j0 + 1) * g.nx + i0 + 1];
+      if (v00 == null || v10 == null || v01 == null || v11 == null) {
+        // 靠岸格：退回最近有效值，避免海岸邊出現破洞
+        const near = [v00, v10, v01, v11].filter((x) => x != null) as number[];
+        return near.length ? near[0] : null;
+      }
+      return (v00 * (1 - tx) + v10 * tx) * (1 - ty) + (v01 * (1 - tx) + v11 * tx) * ty;
+    };
+    // 台灣近海優先用 0.1° 細網格，其餘用 0.2° 粗網格
+    const sample = (lon: number, lat: number): number | null => {
+      const f = sampleGrid(fine, lon, lat);
+      if (f != null) return f;
+      return sampleGrid(coarse, lon, lat);
+    };
+    // 輸出畫布：x 線性於經度、y 線性於麥卡托
+    const my0 = mercY(y0), my1 = mercY(y1);
+    const W = 1800;
+    const H = Math.round((W * (my1 - my0)) / (((x1 - x0) * Math.PI) / 180));
     let cv = oceanCanvasRef.current; if (!cv) { cv = document.createElement("canvas"); oceanCanvasRef.current = cv; }
-    const scale = 8; cv.width = nx * scale; cv.height = ny * scale; const ctx = cv.getContext("2d")!;
-    ctx.clearRect(0, 0, cv.width, cv.height); ctx.imageSmoothingEnabled = true; ctx.filter = "blur(6px)"; ctx.drawImage(small, 0, 0, cv.width, cv.height); ctx.filter = "none";
-    // 依真實海岸線把陸地上的色彩精準挖掉(destination-out)，避免海溫遮罩覆蓋到陸地
+    cv.width = W; cv.height = H;
+    const ctx = cv.getContext("2d")!;
+    const img = ctx.createImageData(W, H);
+    for (let py = 0; py < H; py++) {
+      const lat = invMercY(my1 + ((my0 - my1) * py) / (H - 1)); // 上=北
+      for (let px = 0; px < W; px++) {
+        const lon = x0 + ((x1 - x0) * px) / (W - 1);
+        const v = sample(lon, lat);
+        const o = (py * W + px) * 4;
+        if (v == null) { img.data[o + 3] = 0; continue; }
+        const c = sstColor(v);
+        img.data[o] = c[0]; img.data[o + 1] = c[1]; img.data[o + 2] = c[2]; img.data[o + 3] = 190;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    // 依真實海岸線把陸地上的色彩精準挖掉(台灣本島/離島；其餘陸地在 MUR 本來就是 null)
     const geo = countyGeoRef.current;
     if (geo?.features) {
-      const toPx = (lon: number, lat: number): [number, number] => [((lon - x0) / (x1 - x0)) * cv!.width, ((y1 - lat) / (y1 - y0)) * cv!.height];
+      const toPx = (lon: number, lat: number): [number, number] => [
+        ((lon - x0) / (x1 - x0)) * W,
+        ((my1 - mercY(lat)) / (my1 - my0)) * H,
+      ];
       ctx.save(); ctx.globalCompositeOperation = "destination-out"; ctx.fillStyle = "#000";
       for (const f of geo.features) {
         const g = f.geometry; if (!g) continue;
         const polys = g.type === "Polygon" ? [g.coordinates] : g.type === "MultiPolygon" ? g.coordinates : [];
         for (const poly of polys) {
           ctx.beginPath();
-          for (const ring of poly) ring.forEach((c: number[], k: number) => { const [px, py] = toPx(c[0], c[1]); if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py); });
+          for (const ring of poly) ring.forEach((c: number[], k: number) => { const [ppx, ppy] = toPx(c[0], c[1]); if (k === 0) ctx.moveTo(ppx, ppy); else ctx.lineTo(ppx, ppy); });
           ctx.closePath(); ctx.fill("evenodd");
         }
       }
@@ -1194,24 +1236,47 @@ export default function App() {
   async function toggleOcean() {
     const m = mapRef.current; if (!m) return;
     const on = !oceanOn;
-    if (!on) { for (const id of ["ocean-sst", "ocean-sst-label"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setOceanOn(false); setOceanInfo(""); return; }
+    if (!on) { for (const id of ["ocean-sst", "ocean-sst-label"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); setOceanOn(false); setOceanInfo(""); oceanModeRef.current = 0; setOceanMode(0); return; }
+    if (oceanModeRef.current === 0) { oceanModeRef.current = 1; setOceanMode(1); }
     try {
       const d = await fetch("/api/ocean").then((r) => r.json());
-      if (!d.ok || !(d.points || []).length) { setOceanInfo("海溫資料暫無"); return; }
-      const sh = sstImage(d.points);
+      if (!d.ok || !d.coarse?.vals?.length) { setOceanInfo("海溫資料暫無"); return; }
+      const sh = sstImage(d);
       if (m.getSource("ocean-src")) (m.getSource("ocean-src") as any).updateImage({ url: sh.url });
       else { m.addSource("ocean-src", { type: "image", url: sh.url, coordinates: sh.coords }); m.addLayer({ id: "ocean-sst", type: "raster", source: "ocean-src", paint: { "raster-opacity": 0.7, "raster-resampling": "linear", "raster-fade-duration": 0 } }, m.getLayer("intel-pts") ? "intel-pts" : undefined); }
       m.setLayoutProperty("ocean-sst", "visibility", "visible");
-      // 在海面標出溫度數值。點位是 0.1° 網格(數萬點)，只取每 0.5° 一個當標籤，避免爆量
-      const near = (v: number, step: number) => Math.abs(v / step - Math.round(v / step)) < 0.02;
-      const labPts = d.points.filter((p: any) => near(p.lon, 0.5) && near(p.lat, 0.5));
-      const labFC = { type: "FeatureCollection", features: labPts.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { t: p.sst.toFixed(1) } })) } as any;
+      // 溫度數字：台灣近海(fine 0.1°)每 0.5° 標一個、遠海(coarse 0.2°)每 2° 標一個
+      const labFeats: any[] = [];
+      const addLabels = (g: any, every: number, skipInside?: any) => {
+        if (!g?.vals) return;
+        const stepIdx = Math.round(every / g.step);
+        for (let j = 0; j < g.ny; j += stepIdx) for (let i = 0; i < g.nx; i += stepIdx) {
+          const v = g.vals[j * g.nx + i];
+          if (v == null) continue;
+          const lon = g.lon0 + i * g.step, lat = g.lat0 + j * g.step;
+          if (skipInside && lon >= skipInside.lon0 && lon <= skipInside.lon1 && lat >= skipInside.lat0 && lat <= skipInside.lat1) continue;
+          labFeats.push({ type: "Feature", geometry: { type: "Point", coordinates: [lon, lat] }, properties: { t: v.toFixed(1) } });
+        }
+      };
+      addLabels(d.fine, 0.5);
+      addLabels(d.coarse, 2, d.fine); // 遠海較疏，且不與細網格區重複
+      const labFC = { type: "FeatureCollection", features: labFeats } as any;
       if (m.getSource("ocean-lab-src")) (m.getSource("ocean-lab-src") as mapboxgl.GeoJSONSource).setData(labFC);
       else { m.addSource("ocean-lab-src", { type: "geojson", data: labFC }); m.addLayer({ id: "ocean-sst-label", type: "symbol", source: "ocean-lab-src", layout: { "text-field": ["concat", ["to-string", ["get", "t"]], "°"], "text-size": ["interpolate", ["linear"], ["zoom"], 5, 9, 9, 13], "text-allow-overlap": false }, paint: { "text-color": "#ffffff", "text-halo-color": "#06203f", "text-halo-width": 1.4 } }); }
-      m.setLayoutProperty("ocean-sst-label", "visibility", "visible");
+      // 溫度數字只在模式 2 顯示
+      m.setLayoutProperty("ocean-sst-label", "visibility", oceanModeRef.current === 2 ? "visible" : "none");
       setOceanOn(true);
       setOceanInfo(`海表溫度 ${d.date || ""}（每日更新）\n來源：NASA JPL MUR SST 1km · NOAA ERDDAP`);
     } catch { setOceanInfo("海溫讀取失敗"); }
+  }
+  // 海溫循環：關 → 色溫底圖 → 色溫底圖+溫度數字
+  async function cycleOcean() {
+    const m = mapRef.current; if (!m) return;
+    const next = (oceanModeRef.current + 1) % 3;
+    oceanModeRef.current = next; setOceanMode(next);
+    if (next === 0) { if (oceanOn) await toggleOcean(); return; }
+    if (!oceanOn) { await toggleOcean(); }
+    if (m.getLayer("ocean-sst-label")) m.setLayoutProperty("ocean-sst-label", "visibility", next === 2 ? "visible" : "none");
   }
 
   // ===== 整合測站圖層(氣象/雨量/地震，可自選) =====
@@ -1502,7 +1567,7 @@ export default function App() {
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
         <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)">測站</button>
         <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風：CWA 官方即時路徑(過去/現在/預報 + 暴風圈)">{typhoonMode === 0 ? "颱風" : "颱風：路徑"}</button>
-        <button className={"ocean-btn" + (oceanOn ? " on" : "")} onClick={toggleOcean} title="海表溫度(台大 ODB)">海溫</button>
+        <button className={"ocean-btn" + (oceanMode > 0 ? " on" : "")} onClick={cycleOcean} title="海溫循環：關 → 色溫底圖 → 色溫底圖+溫度數字（NASA JPL MUR SST 每日）">{oceanMode === 0 ? "海溫" : oceanMode === 1 ? "海溫：色溫" : "海溫：色溫+數字"}</button>
         <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環：關 → 河流線+河名 → 河流+即時水位高度">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
         <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS + 近7天航跡">中國船</button>
         <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
