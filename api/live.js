@@ -253,6 +253,74 @@ async function lakelevel() {
   };
 }
 
+// ---- 公路即時影像 CCTV(公路局開放資料，免金鑰；含經緯度與即時快照 JPEG) ----
+async function cctv() {
+  const r = await fetch("https://cctv-maintain.thb.gov.tw/opendataCCTVs.xml", { headers: UA });
+  if (!r.ok) throw new Error("thb cctv " + r.status);
+  const xml = await r.text();
+  const pick = (b, tag) => { const m = b.match(new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`)); return m ? m[1].trim() : ""; };
+  const cams = [];
+  const re = /<CCTV>([\s\S]*?)<\/CCTV>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const b = m[1];
+    const lon = parseFloat(pick(b, "PositionLon")), lat = parseFloat(pick(b, "PositionLat"));
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || lon < 118 || lon > 123 || lat < 21 || lat > 26.5) continue;
+    cams.push({ id: pick(b, "CCTVID"), lon, lat, road: pick(b, "RoadName"), dir: pick(b, "RoadDirection"), mile: pick(b, "LocationMile"), desc: pick(b, "SurveillanceDescription"), img: pick(b, "VideoImageURL") });
+  }
+  return { ok: true, count: cams.length, source: "公路局 公路即時影像(開放資料)", cams };
+}
+
+// ---- 海流(NRT 地轉流) via NOAA AOML ERDDAP(免金鑰，u/v m/s，0.2°) ----
+async function currents() {
+  const box = { lon0: 105, lon1: 145, lat0: 5, lat1: 40, stride: 1, step: 0.2 };
+  const q = `u_current[(last)][(${box.lat0}):${box.stride}:(${box.lat1})][(${box.lon0}):${box.stride}:(${box.lon1})],v_current[(last)][(${box.lat0}):${box.stride}:(${box.lat1})][(${box.lon0}):${box.stride}:(${box.lon1})]`;
+  const url = `https://cwcgom.aoml.noaa.gov/erddap/griddap/miamicurrents.json?${encodeURIComponent(q)}`;
+  const r = await fetch(url, { headers: UA });
+  if (!r.ok) throw new Error(`AOML ${r.status}`);
+  const j = await r.json();
+  const cols = j?.table?.columnNames || [], rows = j?.table?.rows || [];
+  const iT = cols.indexOf("time"), iLat = cols.indexOf("latitude"), iLon = cols.indexOf("longitude"), iU = cols.indexOf("u_current"), iV = cols.indexOf("v_current");
+  const vecs = [];
+  let date = null;
+  for (const row of rows) {
+    if (date == null && iT >= 0) date = String(row[iT] || "").slice(0, 10);
+    const u = Number(row[iU]), v = Number(row[iV]);
+    if (!Number.isFinite(u) || !Number.isFinite(v)) continue;
+    const spd = Math.hypot(u, v);
+    if (spd < 0.03) continue; // 太弱不畫
+    vecs.push({ lon: +Number(row[iLon]).toFixed(2), lat: +Number(row[iLat]).toFixed(2), u: +u.toFixed(3), v: +v.toFixed(3), s: +spd.toFixed(3) });
+  }
+  return { ok: true, date, count: vecs.length, source: "Near Real Time Geostrophic Currents · NOAA AOML CoastWatch", vecs };
+}
+
+// ---- 解放軍基地及設施(uMap 社群資料層，公開 GeoJSON；非官方 OSINT) ----
+async function pla() {
+  const r = await fetch("https://umap.openstreetmap.fr/en/datalayer/77487/087d8925-d506-4be4-ba0e-fa36b05c171d/", { headers: UA });
+  if (!r.ok) throw new Error("umap " + r.status);
+  const j = await r.json();
+  const catOf = (name) => {
+    const n = String(name || "");
+    if (/雷達|OTH|表面波|超視距/.test(n)) return "雷達";
+    if (/機場|空軍|空基|航空|飛/.test(n)) return "機場/空軍";
+    if (/海軍|海航|軍港|水警|艦|港/.test(n)) return "海軍/港";
+    if (/飛彈|導彈|發射|旅|火箭軍/.test(n)) return "飛彈/火箭軍";
+    if (/電子|通信|通訊|測控|情報|信號/.test(n)) return "電子/通信";
+    if (/基地|營區|訓練|指揮/.test(n)) return "基地/營區";
+    return "其他";
+  };
+  const pts = [];
+  for (const f of (j.features || [])) {
+    const g = f.geometry; if (!g || g.type !== "Point") continue;
+    const [lon, lat] = g.coordinates || [];
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+    const name = (f.properties && f.properties.name) || "";
+    if (/^\d{4}\s*年/.test(name)) continue; // 略過作者放的紀念點
+    pts.push({ lon: +lon.toFixed(5), lat: +lat.toFixed(5), name, cat: catOf(name) });
+  }
+  return { ok: true, count: pts.length, source: "社群整理(uMap by 溫約瑟) · 非官方 OSINT", pts };
+}
+
 export default async function handler(req, res) {
   const url = new URL(req.url, "http://x");
   const ds = url.searchParams.get("ds") || "";
@@ -268,6 +336,9 @@ export default async function handler(req, res) {
       case "rivergeo": return send(res, 200, await rivergeo(), "s-maxage=86400, stale-while-revalidate=604800");
       case "barrierlake": return send(res, 200, await barrierlake(), "s-maxage=300, stale-while-revalidate=900");
       case "lakelevel": return send(res, 200, await lakelevel(), "s-maxage=300, stale-while-revalidate=600");
+      case "cctv": return send(res, 200, await cctv(), "s-maxage=1800, stale-while-revalidate=3600");
+      case "currents": return send(res, 200, await currents(), "s-maxage=10800, stale-while-revalidate=43200");
+      case "pla": return send(res, 200, await pla(), "s-maxage=86400, stale-while-revalidate=604800");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
