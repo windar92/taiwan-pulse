@@ -182,16 +182,52 @@ function dedupe(cams) {
   return out;
 }
 
+// ---- [scenic] 觀光景點直播：交通部觀光署「即時影像 Live Taiwan」 ----
+// 各國家風景區管理處/觀光署在 YouTube 發布的官方直播(62 支)。清單為靜態檔 public/scenic-cams.json，
+// 由觀光署官方頁 https://www.taiwan.net.tw/m1.aspx?sNo=0042331 整理、座標以 OSM Nominatim 反查。
+// 快照直接用 YouTube 的「直播即時縮圖」https://i.ytimg.com/vi/<id>/hqdefault_live.jpg
+//   → 已實測 480x360、隨直播更新、無 referer 防盜連，等同其他鏡頭的快照 UX。
+// p="approx" 者座標僅為概略推估(只能定位到母地標或行政區)，前端會標註可能有偏差。
+import { readFile } from "node:fs/promises";
+async function scenic(req) {
+  let raw;
+  try {
+    raw = await readFile(new URL("../public/scenic-cams.json", import.meta.url), "utf8");
+  } catch {
+    // Vercel 打包時若拿不到檔案，改用 HTTP 取同專案的 public 靜態檔
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    const r = await fetch(`${proto}://${host}/scenic-cams.json`);
+    if (!r.ok) throw new Error("scenic json " + r.status);
+    raw = await r.text();
+  }
+  const j = JSON.parse(raw);
+  return (j.cams || [])
+    .filter((c) => inBBox(c.lon, c.lat))
+    .map((c) => ({
+      id: "yt-" + c.yt,
+      lon: c.lon, lat: c.lat,
+      cat: "scenic",
+      name: c.name,
+      desc: c.city + (c.p === "approx" ? "　※此點位為概略推估，實際鏡頭位置可能有偏差" : ""),
+      img: `https://i.ytimg.com/vi/${c.yt}/hqdefault_live.jpg`,
+      link: `https://www.youtube.com/watch?v=${c.yt}`,
+      approx: c.p === "approx",
+      src: "交通部觀光署 即時影像(YouTube 官方直播)",
+    }));
+}
+
 // 每個 fetcher 各自獨立(Promise.allSettled)；wraCams 一次抓完再依 authority_type 拆 river/flood(不重複抓)
 const FETCHERS = [
   { key: "thb", name: "省道 CCTV(公路局)", fn: highway },
   { key: "nfb", name: "國道 CCTV(高公局 TISVCloud)", fn: freeway },
   { key: "wra", name: "水利防災影像(水利署)", fn: wraCams },
+  { key: "tour", name: "觀光景點直播(觀光署)", fn: scenic },
 ];
-const CAT_LABEL = { freeway: "國道", highway: "省道/快速道路", river: "河川/水利", flood: "路口淹水" };
+const CAT_LABEL = { freeway: "國道", highway: "省道/快速道路", river: "河川/水利", flood: "路口淹水", scenic: "觀光景點" };
 
 export default async function handler(req, res) {
-  const settled = await Promise.allSettled(FETCHERS.map((s) => s.fn()));
+  const settled = await Promise.allSettled(FETCHERS.map((s) => s.fn(req)));
   let cams = [];
   const feeds = settled.map((r, i) => {
     const s = FETCHERS[i];
