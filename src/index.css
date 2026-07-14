@@ -229,6 +229,23 @@ body,
   cursor: pointer;
 }
 .sta-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
+/* 即時影像的類別開關(國道/省道/河川/淹水/景點)，樣式沿用測站面板 */
+.cam-panel {
+  position: absolute;
+  top: 500px;
+  right: 120px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: rgba(11, 14, 19, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 8px 10px;
+  backdrop-filter: blur(6px);
+}
+.cam-panel .sta-opt { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: #e7ecf3; white-space: nowrap; cursor: pointer; }
+.cam-panel .sta-dot { width: 10px; height: 10px; border-radius: 50%; }
 .peak-panel {
   position: absolute;
   top: 522px;

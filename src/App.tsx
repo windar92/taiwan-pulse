@@ -133,6 +133,9 @@ export default function App() {
   const [cctvOn, setCctvOn] = useState(false);
   const [cctvInfo, setCctvInfo] = useState("");
   const cctvPopRef = useRef<mapboxgl.Popup | null>(null);
+  // 即時影像的類別開關(國道/省道/河川/淹水/景點)，做法比照「測站」的子面板
+  const [camTypes, setCamTypes] = useState<Set<string>>(new Set(["freeway", "highway", "river", "flood", "scenic"]));
+  const [camCounts, setCamCounts] = useState<Record<string, number>>({});
   const [currentsOn, setCurrentsOn] = useState(false);
   const [currentsInfo, setCurrentsInfo] = useState("");
   const [plaOn, setPlaOn] = useState(false);
@@ -1640,6 +1643,20 @@ export default function App() {
     scenic: "#66bb6a",    // 觀光景點 綠
   };
   const CAM_CAT_NAME: Record<string, string> = { freeway: "國道", highway: "省道", river: "河川", flood: "淹水", scenic: "景點" };
+  // 依勾選的類別過濾點位(圖層本身仍是同一個 cctv-pt，只換 filter)
+  function applyCamFilter(types: Set<string>) {
+    const m = mapRef.current; if (!m || !m.getLayer("cctv-pt")) return;
+    m.setFilter("cctv-pt", ["in", ["get", "cat"], ["literal", Array.from(types)]] as any);
+  }
+  function toggleCamType(t: string) {
+    setCamTypes((prev) => {
+      const n = new Set(prev);
+      n.has(t) ? n.delete(t) : n.add(t);
+      applyCamFilter(n);
+      cctvPopRef.current?.remove();
+      return n;
+    });
+  }
   async function toggleCctv() {
     const m = mapRef.current; if (!m) return;
     const on = !cctvOn;
@@ -1687,9 +1704,12 @@ export default function App() {
         });
       }
       m.setLayoutProperty("cctv-pt", "visibility", "visible");
-      const parts = (d.cats || []).map((c: any) => `${c.label} ${c.count}`).join("　");
+      applyCamFilter(camTypes); // 套用目前勾選的類別
+      const counts: Record<string, number> = {};
+      for (const c of (d.cats || [])) counts[c.cat] = c.count;
+      setCamCounts(counts);
       const dead = (d.feeds || []).filter((f: any) => !f.ok).map((f: any) => f.name.replace(/\(.*/, ""));
-      setCctvInfo(`即時影像 ${d.count} 支　${parts}　點擊看即時畫面${dead.length ? `　※${dead.join("、")}官方服務目前中斷` : ""}`);
+      setCctvInfo(`即時影像 ${d.count} 支　點擊看即時畫面${dead.length ? `　※${dead.join("、")}官方服務目前中斷` : ""}`);
     } catch { setCctvInfo("即時影像載入失敗"); }
   }
   // ===== 即時海流(NRT 地轉流，箭頭) =====
@@ -1853,6 +1873,17 @@ export default function App() {
             <label key={k} className="sta-opt">
               <input type="checkbox" checked={staTypes.has(k)} onChange={() => toggleStaType(k)} />
               <span className="sta-dot" style={{ background: c }} />{label}
+            </label>
+          ))}
+        </div>
+      )}
+      {cctvOn && (
+        <div className="cam-panel">
+          {([["freeway", "國道"], ["highway", "省道"], ["river", "河川"], ["flood", "淹水"], ["scenic", "景點"]] as const).map(([k, label]) => (
+            <label key={k} className="sta-opt">
+              <input type="checkbox" checked={camTypes.has(k)} onChange={() => toggleCamType(k)} />
+              <span className="sta-dot" style={{ background: CAM_CAT_COLOR[k] }} />{label}
+              <span style={{ opacity: 0.55, marginLeft: 4 }}>{camCounts[k] ?? 0}</span>
             </label>
           ))}
         </div>
