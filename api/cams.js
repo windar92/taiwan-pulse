@@ -177,7 +177,7 @@ async function wraCams() {
 function dedupe(cams) {
   const seenPos = new Set(), seenId = new Set(), out = [];
   const posCount = new Map();
-  for (const c of cams) {
+  for (let c of cams) { // 注意：下面會對 c 重新賦值(散開重疊點)，故用 let
     if (c.cat === "scenic") {
       if (seenId.has(c.id)) continue;
       seenId.add(c.id);
