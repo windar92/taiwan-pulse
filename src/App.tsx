@@ -1664,8 +1664,11 @@ export default function App() {
               "highway", CAM_CAT_COLOR.highway,
               "river", CAM_CAT_COLOR.river,
               "flood", CAM_CAT_COLOR.flood,
+              "scenic", CAM_CAT_COLOR.scenic,
               "#bdbdbd"],
-            "circle-stroke-width": 1, "circle-stroke-color": "#20160a", "circle-opacity": 0.9,
+            "circle-stroke-width": ["case", ["==", ["get", "cat"], "scenic"], 1.6, 1],
+            "circle-stroke-color": ["case", ["==", ["get", "cat"], "scenic"], "#0b2b12", "#20160a"],
+            "circle-opacity": 0.9,
           },
         });
         m.on("mouseenter", "cctv-pt", () => { m.getCanvas().style.cursor = "pointer"; });
