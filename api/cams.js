@@ -170,13 +170,30 @@ async function wraCams() {
   return cams;
 }
 
-// ---- 去重：同座標(取4位小數≈11公尺)只留第一筆 ----
+// ---- 去重 ----
+// 路口/河川鏡頭：同座標(4位小數≈11公尺)視為同一支，只留第一筆。
+// 景點鏡頭(scenic)：不做座標去重——多支鏡頭常共用同一個「概略座標」(例：角板山思親亭/生態池/梅園
+// 都只能定位到「角板山」)，若照座標去重會把不同鏡頭誤刪。改以 id 去重，並把重疊點做微小偏移以利點選。
 function dedupe(cams) {
-  const seen = new Set(), out = [];
+  const seenPos = new Set(), seenId = new Set(), out = [];
+  const posCount = new Map();
   for (const c of cams) {
+    if (c.cat === "scenic") {
+      if (seenId.has(c.id)) continue;
+      seenId.add(c.id);
+      const k = c.lon.toFixed(4) + "," + c.lat.toFixed(4);
+      const n = posCount.get(k) || 0;
+      posCount.set(k, n + 1);
+      if (n > 0) { // 同座標第 2 支以後，繞小圓散開約 120 公尺，避免完全疊住點不到
+        const ang = (n * 2 * Math.PI) / 6, r = 0.0011;
+        c = { ...c, lon: +(c.lon + r * Math.cos(ang)).toFixed(6), lat: +(c.lat + r * Math.sin(ang)).toFixed(6) };
+      }
+      out.push(c);
+      continue;
+    }
     const k = c.lon.toFixed(4) + "," + c.lat.toFixed(4);
-    if (seen.has(k)) continue;
-    seen.add(k);
+    if (seenPos.has(k)) continue;
+    seenPos.add(k);
     out.push(c);
   }
   return out;
