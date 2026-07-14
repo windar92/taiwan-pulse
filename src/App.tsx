@@ -1637,8 +1637,9 @@ export default function App() {
     highway: "#ffd54f",   // 省道 黃
     river: "#4fc3f7",     // 河川/水利 藍
     flood: "#ab47bc",     // 路口淹水 紫
+    scenic: "#66bb6a",    // 觀光景點 綠
   };
-  const CAM_CAT_NAME: Record<string, string> = { freeway: "國道", highway: "省道", river: "河川", flood: "淹水" };
+  const CAM_CAT_NAME: Record<string, string> = { freeway: "國道", highway: "省道", river: "河川", flood: "淹水", scenic: "景點" };
   async function toggleCctv() {
     const m = mapRef.current; if (!m) return;
     const on = !cctvOn;
@@ -1647,14 +1648,17 @@ export default function App() {
     try {
       const d = await fetch("/api/cams").then((r) => r.json());
       if (!d.ok || !(d.cams || []).length) { setCctvInfo("即時影像暫無"); return; }
-      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, cat: c.cat, name: c.name, desc: c.desc, img: c.img, src: c.src } })) } as any;
+      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, cat: c.cat, name: c.name, desc: c.desc, img: c.img, src: c.src, link: c.link || "", approx: c.approx ? 1 : 0 } })) } as any;
       if (m.getSource("cctv-src")) (m.getSource("cctv-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("cctv-src", { type: "geojson", data: fc });
         m.addLayer({
           id: "cctv-pt", type: "circle", source: "cctv-src",
           paint: {
-            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 2.2, 12, 5],
+            // 景點鏡頭只有 62 支但可看性高，畫大一點以免淹沒在數千支路口鏡頭裡
+            "circle-radius": ["interpolate", ["linear"], ["zoom"],
+              6, ["case", ["==", ["get", "cat"], "scenic"], 4, 2.2],
+              12, ["case", ["==", ["get", "cat"], "scenic"], 8, 5]],
             "circle-color": ["match", ["get", "cat"],
               "freeway", CAM_CAT_COLOR.freeway,
               "highway", CAM_CAT_COLOR.highway,
@@ -1673,8 +1677,9 @@ export default function App() {
           const imgHtml = src ? `<img src="${src}" style="width:280px;max-width:70vw;border-radius:6px;margin-top:5px" onerror="this.replaceWith(Object.assign(document.createElement('div'),{textContent:'（此鏡頭目前取不到畫面）',style:'opacity:.6;font-size:11px;margin-top:5px'}))"/>` : "";
           const tag = CAM_CAT_NAME[p.cat] || "";
           const col = CAM_CAT_COLOR[p.cat] || "#bdbdbd";
+          const linkHtml = p.link ? `<br/><a href="${p.link}" target="_blank" rel="noopener" style="color:#7ec8ff;font-size:11px">在 YouTube 開啟直播 ↗</a>` : "";
           cctvPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "300px" }).setLngLat((f.geometry as any).coordinates).setHTML(
-            `<div class="qpop"><b><span style="color:${col}">●</span> ${p.name || ""}</b> <span style="opacity:.6;font-size:11px">${tag}</span><br/><span style="opacity:.85">${p.desc || ""}</span>${imgHtml}<br/><span style="opacity:.6;font-size:11px">${p.src || ""}</span></div>`
+            `<div class="qpop"><b><span style="color:${col}">●</span> ${p.name || ""}</b> <span style="opacity:.6;font-size:11px">${tag}</span><br/><span style="opacity:.85">${p.desc || ""}</span>${imgHtml}${linkHtml}<br/><span style="opacity:.6;font-size:11px">${p.src || ""}</span></div>`
           ).addTo(m);
         });
       }
