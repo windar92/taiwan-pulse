@@ -141,6 +141,16 @@ export default function App() {
   const [plaOn, setPlaOn] = useState(false);
   const [plaInfo, setPlaInfo] = useState("");
   const plaPopRef = useRef<mapboxgl.Popup | null>(null);
+  // 解放軍設施的類別開關(比照即時影像/測站)
+  const PLA_CATS: [string, string][] = [
+    ["軍機場/空軍", "#40c4ff"], ["海軍/軍港", "#18ffff"], ["海軍陸戰", "#1de9b6"],
+    ["火箭軍", "#d500f9"], ["飛彈", "#ff9100"], ["防空飛彈", "#ffab40"],
+    ["陸軍", "#8d6e63"], ["雷達/預警", "#ff5252"], ["電子/通信", "#e040fb"],
+    ["海警", "#eceff1"], ["基地/指揮", "#ffd740"], ["油氣平台", "#ff6e40"], ["其他", "#b0bec5"],
+  ];
+  const PLA_COLOR: Record<string, string> = Object.fromEntries(PLA_CATS);
+  const [plaTypes, setPlaTypes] = useState<Set<string>>(new Set(PLA_CATS.map(([k]) => k)));
+  const [plaCounts, setPlaCounts] = useState<Record<string, number>>({});
   const [gzOn, setGzOn] = useState(false);
   const gzPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gzFrom, setGzFrom] = useState(0);
@@ -1749,33 +1759,61 @@ export default function App() {
       setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
     } catch { setCurrentsInfo("海流載入失敗"); }
   }
-  // ===== 解放軍基地及設施(社群 OSINT，非官方) =====
+  // ===== 解放軍基地及設施(社群 OSINT + 東海油氣平台) =====
+  function applyPlaFilter(types: Set<string>) {
+    const m = mapRef.current; if (!m || !m.getLayer("pla-pt")) return;
+    m.setFilter("pla-pt", ["in", ["get", "cat"], ["literal", Array.from(types)]] as any);
+  }
+  function togglePlaType(t: string) {
+    setPlaTypes((prev) => { const n = new Set(prev); n.has(t) ? n.delete(t) : n.add(t); applyPlaFilter(n); plaPopRef.current?.remove(); return n; });
+  }
   async function togglePla() {
     const m = mapRef.current; if (!m) return;
     const on = !plaOn;
-    if (!on) { for (const id of ["pla-pt"]) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); plaPopRef.current?.remove(); setPlaOn(false); setPlaInfo(""); return; }
+    if (!on) { if (m.getLayer("pla-pt")) m.setLayoutProperty("pla-pt", "visibility", "none"); plaPopRef.current?.remove(); setPlaOn(false); setPlaInfo(""); return; }
     setPlaOn(true); setPlaInfo("解放軍設施載入中…");
     try {
       const d = await fetch("/api/live?ds=pla").then((r) => r.json());
       if (!d.ok || !(d.pts || []).length) { setPlaInfo("資料暫時無法取得(社群 uMap 常不穩)"); return; }
-      const fc = { type: "FeatureCollection", features: d.pts.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { name: p.name, cat: p.cat } })) } as any;
-      const colorByCat = ["match", ["get", "cat"], "雷達", "#ff5252", "機場/空軍", "#40c4ff", "海軍/港", "#18ffff", "飛彈/火箭軍", "#ff9100", "電子/通信", "#e040fb", "基地/營區", "#ffd740", "#b0bec5"];
+      const fc = { type: "FeatureCollection", features: d.pts.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { name: p.name, cat: p.cat, note: p.note || "", src: p.src || "osint", approx: p.approx ? 1 : 0 } })) } as any;
+      const colorByCat: any = ["match", ["get", "cat"], ...PLA_CATS.flatMap(([k, c]) => [k, c]), "#b0bec5"];
       if (m.getSource("pla-src")) (m.getSource("pla-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("pla-src", { type: "geojson", data: fc });
-        m.addLayer({ id: "pla-pt", type: "circle", source: "pla-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 2.2, 10, 5], "circle-color": colorByCat as any, "circle-stroke-width": 0.7, "circle-stroke-color": "rgba(0,0,0,0.6)", "circle-opacity": 0.9 } });
+        m.addLayer({
+          id: "pla-pt", type: "circle", source: "pla-src",
+          paint: {
+            // 油氣平台畫大一點(它是重點新增)
+            "circle-radius": ["interpolate", ["linear"], ["zoom"],
+              4, ["case", ["==", ["get", "cat"], "油氣平台"], 4, 2.2],
+              10, ["case", ["==", ["get", "cat"], "油氣平台"], 7, 5]],
+            "circle-color": colorByCat,
+            "circle-stroke-width": ["case", ["==", ["get", "cat"], "油氣平台"], 1.4, 0.7],
+            "circle-stroke-color": "rgba(0,0,0,0.6)", "circle-opacity": 0.9,
+          },
+        });
         m.on("mouseenter", "pla-pt", () => { m.getCanvas().style.cursor = "pointer"; });
         m.on("mouseleave", "pla-pt", () => { m.getCanvas().style.cursor = ""; });
         m.on("click", "pla-pt", (e) => {
           const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
           plaPopRef.current?.remove();
-          plaPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "260px" }).setLngLat((f.geometry as any).coordinates).setHTML(
-            `<div class="qpop"><b>${p.name || ""}</b><br/>類別：${p.cat || "其他"}<br/><span style="opacity:.6;font-size:11px">社群整理·非官方 OSINT，僅供參考</span></div>`
+          const col = PLA_COLOR[p.cat] || "#b0bec5";
+          const isPlat = p.cat === "油氣平台";
+          const noteHtml = p.note ? `<br/><span style="opacity:.8;font-size:11.5px">${p.note}</span>` : "";
+          const srcLine = isPlat
+            ? `日本外務省確認・CSIS AMTI 座標　${p.approx ? "※此點為概略/合併標記" : ""}`
+            : "社群整理·非官方 OSINT，僅供參考";
+          plaPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "280px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.name || ""}</b><br/><span style="color:${col}">●</span> ${p.cat || "其他"}${noteHtml}<br/><span style="opacity:.6;font-size:11px">${srcLine}</span></div>`
           ).addTo(m);
         });
       }
       m.setLayoutProperty("pla-pt", "visibility", "visible");
-      setPlaInfo(`解放軍基地及設施 ${d.pts.length} 處（社群 OSINT·非官方）\n色：雷達/機場/海軍/飛彈/電子/基地`);
+      applyPlaFilter(plaTypes);
+      const counts: Record<string, number> = {};
+      for (const p of d.pts) counts[p.cat] = (counts[p.cat] || 0) + 1;
+      setPlaCounts(counts);
+      setPlaInfo(`解放軍設施 ${d.pts.length} 處（社群 OSINT）＋東海油氣平台 ${d.platformCount || 0} 座（日本外務省/AMTI）　可用左側面板篩類別`);
     } catch { setPlaInfo("解放軍設施載入失敗"); }
   }
   const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
@@ -1884,6 +1922,17 @@ export default function App() {
               <input type="checkbox" checked={camTypes.has(k)} onChange={() => toggleCamType(k)} />
               <span className="sta-dot" style={{ background: CAM_CAT_COLOR[k] }} />{label}
               <span style={{ opacity: 0.55, marginLeft: 4 }}>{camCounts[k] ?? 0}</span>
+            </label>
+          ))}
+        </div>
+      )}
+      {plaOn && (
+        <div className="pla-panel">
+          {PLA_CATS.filter(([k]) => (plaCounts[k] ?? 0) > 0).map(([k, c]) => (
+            <label key={k} className="sta-opt">
+              <input type="checkbox" checked={plaTypes.has(k)} onChange={() => togglePlaType(k)} />
+              <span className="sta-dot" style={{ background: c }} />{k}
+              <span style={{ opacity: 0.55, marginLeft: 4 }}>{plaCounts[k] ?? 0}</span>
             </label>
           ))}
         </div>
