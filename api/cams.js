@@ -258,5 +258,14 @@ export default async function handler(req, res) {
   const byCat = {};
   for (const c of cams) byCat[c.cat] = (byCat[c.cat] || 0) + 1;
   const cats = Object.keys(byCat).map((k) => ({ cat: k, label: CAT_LABEL[k] || k, count: byCat[k] }));
-  return send(res, 200, { ok: true, count: cams.length, cats, feeds, cams }, "s-maxage=600, stale-while-revalidate=1800");
+  // —— 瘦身：id 前端未用(移除)；src 只有數種、改成 cat→來源 對照表送一次；座標降到 4 位小數(~11m) ——
+  const srcByCat = {};
+  const slim = cams.map((c) => {
+    if (c.src && !srcByCat[c.cat]) srcByCat[c.cat] = c.src;
+    const o = { lon: +c.lon.toFixed(4), lat: +c.lat.toFixed(4), cat: c.cat, name: c.name, desc: c.desc, img: c.img };
+    if (c.link) o.link = c.link;
+    if (c.approx) o.approx = 1;
+    return o;
+  });
+  return send(res, 200, { ok: true, count: slim.length, cats, feeds, srcByCat, cams: slim }, "s-maxage=600, stale-while-revalidate=1800");
 }
