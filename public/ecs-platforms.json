@@ -1,0 +1,28 @@
+{
+  "source": "座標主體來自 CSIS AMTI 官方互動地圖 'Oil and Gas Platforms in the East China Sea' 背後的 CARTO 資料表 east_china_sea_oil_rigs_2026（經 amti-viz GitHub repo 之公開 CARTO SQL API 端點直接查詢取得，非人工估算）；平台總數與『中間線中國側』定性描述引自日本外務省 2026-01-16 更新頁面 'The Current Status of China's Unilateral Development of Natural Resources in the East China Sea'（確認共22座構造物）；平台興建背景與新平台時序引自 AMTI 文章 'Delving Deeper: China Tests New Waters in East China Sea Oil and Gas'（2026-06-05）。",
+  "note": "全部21個落點位於中日地理中間線中國側；日本主張應以中間線劃界，中國不承認中間線但目前開發活動大致仍位於其西側。日本外務省2026年1月確認之22座構造物中，AMTI地圖資料表可對應落點者為21座（可能因新建平台尚未併入資料表、或部分緊鄰平台合併為單一標記所致，見各筆備註）。3座標記 new_or_old=New 者為2025年8月至2026年4月間新建成的permanent platform。",
+  "updated": "2026-07",
+  "platforms": [
+    { "name": "春曉 (白樺 / Shirakaba / Chunxiao)", "lon": 124.9348, "lat": 28.36184722, "note": "AMTI資料表原始標籤: Shirakaba。中日雙方最早、最具代表性的爭議氣田，日本稱白樺。", "p": "ok" },
+    { "name": "天外天 (樫 / Kashi / Tianwaitian)", "lon": 125.0070194, "lat": 28.52037778, "note": "AMTI資料表原始標籤: Kashi。", "p": "ok" },
+    { "name": "寶雲亭 (Baoyunting，AMTI資料表拼作 Baojiaoting)", "lon": 124.9236028, "lat": 29.13977778, "note": "AMTI資料表原始標籤: Baojiaoting，應對應中文文獻常見的『寶雲亭』氣田，拼音疑為AMTI資料誤植，未能另行交叉驗證。", "p": "approx" },
+    { "name": "平台 #1 (AMTI編號，未確認中/日文對應名稱)", "lon": 125.126, "lat": 28.85, "note": "AMTI互動地圖自訂編號 Platform #1，屬2013–2015年沿中間線興建之一批平台。", "p": "ok" },
+    { "name": "平台 #2", "lon": 125.0981667, "lat": 28.70800556, "note": "AMTI互動地圖自訂編號 Platform #2。", "p": "ok" },
+    { "name": "平台 #3", "lon": 125.1724306, "lat": 28.63103889, "note": "AMTI互動地圖自訂編號 Platform #3。", "p": "ok" },
+    { "name": "平台 #4", "lon": 125.06658, "lat": 29.33665, "note": "AMTI互動地圖自訂編號 Platform #4。", "p": "ok" },
+    { "name": "平台 #5", "lon": 124.9671917, "lat": 29.20753056, "note": "AMTI互動地圖自訂編號 Platform #5。", "p": "ok" },
+    { "name": "平台 #6", "lon": 124.9086611, "lat": 29.02895, "note": "AMTI互動地圖自訂編號 Platform #6。", "p": "ok" },
+    { "name": "平台 #8", "lon": 125.26464, "lat": 28.88709, "note": "AMTI互動地圖自訂編號 Platform #8。", "p": "ok" },
+    { "name": "平台 #7 & #10 (合併標記)", "lon": 125.08499, "lat": 28.96671, "note": "AMTI原始資料將 #7 與 #10 合併為單一座標點，實際可能為兩座相鄰構造物。", "p": "approx" },
+    { "name": "平湖 (Pinghu) & 平台 #9 (合併標記)", "lon": 124.91445, "lat": 29.07341, "note": "AMTI原始資料將『平湖』氣田與 Platform #9 合併為單一座標點，實際可能為兩座相鄰構造物；平湖為東海油氣田群中最早投產者之一(1998年)。", "p": "approx" },
+    { "name": "平台 #11", "lon": 125.2242667, "lat": 29.5753, "note": "AMTI互動地圖自訂編號 Platform #11。", "p": "ok" },
+    { "name": "平台 #12", "lon": 125.1408889, "lat": 29.61007778, "note": "AMTI互動地圖自訂編號 Platform #12。", "p": "ok" },
+    { "name": "平台 #13", "lon": 125.5864, "lat": 29.45437, "note": "AMTI互動地圖自訂編號 Platform #13，位置較偏東北，接近中日共同開發區。", "p": "ok" },
+    { "name": "平台 #14", "lon": 125.09648, "lat": 29.39625, "note": "AMTI互動地圖自訂編號 Platform #14。", "p": "ok" },
+    { "name": "平台 #15", "lon": 125.07715, "lat": 29.10994, "note": "AMTI互動地圖自訂編號 Platform #15。", "p": "ok" },
+    { "name": "平台 #16", "lon": 125.4034, "lat": 29.3971, "note": "AMTI互動地圖自訂編號 Platform #16。", "p": "ok" },
+    { "name": "平台 #17 (新建)", "lon": 125.1273, "lat": 29.35897, "note": "AMTI標記為 new_or_old=New；2025年8月由起重船「藍鯨7500」建成之新固定平台。", "p": "ok" },
+    { "name": "平台 #18 (新建)", "lon": 125.50421, "lat": 29.33241, "note": "AMTI標記為 new_or_old=New；2026年1月由起重船「藍鯨7500」建成之新固定平台，位置偏東北，接近共同開發區。", "p": "ok" },
+    { "name": "平台 #19 (新建)", "lon": 125.11499, "lat": 29.18036, "note": "AMTI標記為 new_or_old=New；2026年4月由起重船「鐵建起重5000」建成之新固定平台。", "p": "ok" }
+  ]
+}
