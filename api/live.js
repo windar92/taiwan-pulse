@@ -294,21 +294,29 @@ async function currents() {
   return { ok: true, date, count: vecs.length, source: "Near Real Time Geostrophic Currents · NOAA AOML CoastWatch", vecs };
 }
 
-// ---- 解放軍基地及設施(uMap 社群資料層，公開 GeoJSON；非官方 OSINT) ----
-async function pla() {
+// ---- 解放軍基地及設施(uMap 社群資料層，公開 GeoJSON；非官方 OSINT) + 東海油氣平台(官方/AMTI) ----
+// 依中文名稱關鍵字分類；順序由「最具體」到「最一般」，先命中者為準。
+function plaCatOf(name) {
+  const n = String(name || "");
+  if (/海警|海監|海事局|漁政|海巡/.test(n)) return "海警";
+  if (/陸戰|兩棲/.test(n)) return "海軍陸戰";
+  if (/火箭軍|戰略|洲際|核|彈道|導彈旅|飛彈旅/.test(n)) return "火箭軍";
+  if (/防空|地空|紅旗|HQ-|S-?300|S-?400|SAM/.test(n)) return "防空飛彈";
+  if (/飛彈|導彈|反艦|岸置|發射/.test(n)) return "飛彈";
+  if (/雷達|OTH|表面波|超視距|預警/.test(n)) return "雷達/預警";
+  if (/機場|空軍|空基|航空兵|戰機|轟|殲|運-|直升機|飛/.test(n)) return "軍機場/空軍";
+  if (/海軍|海航|軍港|艦隊|潛艇|潛艦|驅逐|護衛|登陸艦|艦|軍碼頭|港/.test(n)) return "海軍/軍港";
+  if (/電子|通信|通訊|測控|情報|信號|偵聽/.test(n)) return "電子/通信";
+  if (/集團軍|合成旅|裝甲|砲兵|炮兵|步兵|陸軍/.test(n)) return "陸軍";
+  if (/基地|營區|訓練|指揮|靶場/.test(n)) return "基地/指揮";
+  return "其他";
+}
+
+async function pla(req) {
+  // 1) 社群 OSINT 設施點
   const r = await fetch("https://umap.openstreetmap.fr/en/datalayer/77487/087d8925-d506-4be4-ba0e-fa36b05c171d/", { headers: UA });
   if (!r.ok) throw new Error("umap " + r.status);
   const j = await r.json();
-  const catOf = (name) => {
-    const n = String(name || "");
-    if (/雷達|OTH|表面波|超視距/.test(n)) return "雷達";
-    if (/機場|空軍|空基|航空|飛/.test(n)) return "機場/空軍";
-    if (/海軍|海航|軍港|水警|艦|港/.test(n)) return "海軍/港";
-    if (/飛彈|導彈|發射|旅|火箭軍/.test(n)) return "飛彈/火箭軍";
-    if (/電子|通信|通訊|測控|情報|信號/.test(n)) return "電子/通信";
-    if (/基地|營區|訓練|指揮/.test(n)) return "基地/營區";
-    return "其他";
-  };
   const pts = [];
   for (const f of (j.features || [])) {
     const g = f.geometry; if (!g || g.type !== "Point") continue;
@@ -316,9 +324,39 @@ async function pla() {
     if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
     const name = (f.properties && f.properties.name) || "";
     if (/^\d{4}\s*年/.test(name)) continue; // 略過作者放的紀念點
-    pts.push({ lon: +lon.toFixed(5), lat: +lat.toFixed(5), name, cat: catOf(name) });
+    pts.push({ lon: +lon.toFixed(5), lat: +lat.toFixed(5), name, cat: plaCatOf(name), src: "osint" });
   }
-  return { ok: true, count: pts.length, source: "社群整理(uMap by 溫約瑟) · 非官方 OSINT", pts };
+  // 2) 東海油氣平台(日本外務省確認 + CSIS AMTI 座標)——另成一類，來源可信度較高
+  let platformCount = 0;
+  try {
+    let raw;
+    try {
+      const { readFile } = await import("node:fs/promises");
+      raw = await readFile(new URL("../public/ecs-platforms.json", import.meta.url), "utf8");
+    } catch {
+      const host = req?.headers?.["x-forwarded-host"] || req?.headers?.host;
+      const proto = req?.headers?.["x-forwarded-proto"] || "https";
+      const rr = await fetch(`${proto}://${host}/ecs-platforms.json`);
+      if (rr.ok) raw = await rr.text();
+    }
+    if (raw) {
+      const pj = JSON.parse(raw);
+      for (const p of (pj.platforms || [])) {
+        if (!Number.isFinite(p.lon) || !Number.isFinite(p.lat)) continue;
+        pts.push({
+          lon: +Number(p.lon).toFixed(5), lat: +Number(p.lat).toFixed(5),
+          name: p.name, cat: "油氣平台",
+          note: p.note || "", approx: p.p === "approx", src: "amti",
+        });
+        platformCount++;
+      }
+    }
+  } catch { /* 平台檔拿不到就只回 OSINT 設施 */ }
+  return {
+    ok: true, count: pts.length, platformCount,
+    source: "設施點：社群整理(uMap by 溫約瑟)·非官方 OSINT；油氣平台：日本外務省確認+CSIS AMTI 座標",
+    pts,
+  };
 }
 
 export default async function handler(req, res) {
@@ -338,7 +376,7 @@ export default async function handler(req, res) {
       case "lakelevel": return send(res, 200, await lakelevel(), "s-maxage=300, stale-while-revalidate=600");
       case "cctv": return send(res, 200, await cctv(), "s-maxage=1800, stale-while-revalidate=3600");
       case "currents": return send(res, 200, await currents(), "s-maxage=10800, stale-while-revalidate=43200");
-      case "pla": return send(res, 200, await pla(), "s-maxage=86400, stale-while-revalidate=604800");
+      case "pla": return send(res, 200, await pla(req), "s-maxage=86400, stale-while-revalidate=604800");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
