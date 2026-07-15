@@ -919,8 +919,8 @@ export default function App() {
   // 月索引：2020-09 = 0
   function monthIdx(dateStr: string) { const d = new Date(dateStr); return (d.getUTCFullYear() - 2020) * 12 + d.getUTCMonth() - 8; }
   function idxLabel(idx: number) { const y = 2020 + Math.floor((idx + 8) / 12); const mo = ((idx + 8) % 12) + 1; return `${y}/${String(mo).padStart(2, "0")}`; }
-  const GZ_COLOR = ["match", ["get", "type"], "air", "#ff6d00", "drill", "#d50000", "coastguard", "#ff9100", "cable", "#ffd600", "sea", "#2962ff", "survey", "#aa00ff", "#bbbbbb"];
-  const GZ_TYPE_TXT: Record<string, string> = { air: "共機空域侵擾", drill: "圍台軍演/軍事威懾", coastguard: "海警灰色地帶", cable: "海纜破壞", sea: "共艦動態", survey: "科研測繪" };
+  const GZ_COLOR = ["match", ["get", "type"], "air", "#ff6d00", "drill", "#d50000", "coastguard", "#ff9100", "cable", "#ffd600", "sea", "#2962ff", "survey", "#aa00ff", "watercannon", "#00b8d4", "ram", "#c51162", "laser", "#76ff03", "#bbbbbb"];
+  const GZ_TYPE_TXT: Record<string, string> = { air: "共機空域侵擾", drill: "圍台軍演/軍事威懾", coastguard: "海警灰色地帶", cable: "海纜破壞", sea: "共艦動態", survey: "科研測繪", watercannon: "水砲攻擊", ram: "衝撞/包圍/登檢", laser: "軍規雷射照射" };
   // 依類型的小圖示(飛機/軍艦/海警船/海纜船)
   const GZ_ICONS: Record<string, string> = {
     "ic-plane": `<svg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 24 24'><path fill='%23ff8f00' stroke='%23000' stroke-width='0.6' d='M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5z'/></svg>`,
@@ -958,9 +958,17 @@ export default function App() {
     if (!on) { for (const id of ids) if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", "none"); gzPopRef.current?.remove(); setGzOn(false); setGzInfo(""); return; }
     try {
       const d = await fetch("/api/intel?action=read&t=" + Date.now()).then((r) => r.json());
-      if (!d.ok || !(d.incursions || []).length) { setGzInfo("入侵資料暫時無法取得(可能需先 seed)"); return; }
-      gzDataRef.current = d.incursions;
-      const maxIdx = Math.max(...d.incursions.map((e: any) => monthIdx(e.ev_date)), monthIdx(new Date().toISOString()));
+      let events: any[] = (d.ok && d.incursions) ? d.incursions.slice() : [];
+      // 併入 AMTI 策展的東沙/南海事件(靜態檔，含明確日期/座標/來源 URL)
+      try {
+        const se = await fetch("/scs-events.json").then((r) => r.json());
+        for (const e of (se.events || [])) {
+          events.push({ ev_date: e.ev_date, type: e.type, zone: e.zone, lng: e.lng, lat: e.lat, cnt: e.cnt || 1, detail: e.detail, source: e.source, url: e.url || "", region: e.region });
+        }
+      } catch { /* 靜態事件檔拿不到就只用 DB 事件 */ }
+      if (!events.length) { setGzInfo("入侵資料暫時無法取得(可能需先 seed)"); return; }
+      gzDataRef.current = events;
+      const maxIdx = Math.max(...events.map((e: any) => monthIdx(e.ev_date)), monthIdx(new Date().toISOString()));
       setGzMax(maxIdx); setGzFrom(0); setGzTo(maxIdx);
       if (!m.getSource("gz-src")) {
         m.addSource("gz-src", { type: "geojson", data: { type: "FeatureCollection", features: [] } as any });
