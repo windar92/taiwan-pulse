@@ -1683,7 +1683,8 @@ export default function App() {
     try {
       const d = await fetch("/api/cams").then((r) => r.json());
       if (!d.ok || !(d.cams || []).length) { setCctvInfo("即時影像暫無"); return; }
-      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { id: c.id, cat: c.cat, name: c.name, desc: c.desc, img: c.img, src: c.src, link: c.link || "", approx: c.approx ? 1 : 0 } })) } as any;
+      const srcByCat = d.srcByCat || {};
+      const fc = { type: "FeatureCollection", features: d.cams.map((c: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [c.lon, c.lat] }, properties: { cat: c.cat, name: c.name, desc: c.desc, img: c.img, src: srcByCat[c.cat] || "", link: c.link || "", approx: c.approx ? 1 : 0 } })) } as any;
       if (m.getSource("cctv-src")) (m.getSource("cctv-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
         m.addSource("cctv-src", { type: "geojson", data: fc });
