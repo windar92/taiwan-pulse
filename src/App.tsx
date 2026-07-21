@@ -66,6 +66,8 @@ export default function App() {
   const [showMemo, setShowMemo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
   const [newsOpen, setNewsOpen] = useState(false);
+  const [resOpen, setResOpen] = useState(false);
+  const [resList, setResList] = useState<any[]>([]);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis">("dark");
@@ -1825,6 +1827,14 @@ export default function App() {
       setPlaInfo(`解放軍設施 ${d.pts.length} 處（社群 OSINT）＋東海油氣平台 ${d.platformCount || 0} 座（日本外務省/AMTI）　可用左側面板篩類別`);
     } catch { setPlaInfo("解放軍設施載入失敗"); }
   }
+  // ===== 資訊下載區(防災/民防參考文件) =====
+  async function toggleResources() {
+    const next = !resOpen;
+    setResOpen(next);
+    if (next && !resList.length) {
+      try { const d = await fetch("/resources.json").then((r) => r.json()); setResList(d.resources || []); } catch { /* ignore */ }
+    }
+  }
   const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
@@ -1883,6 +1893,7 @@ export default function App() {
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
+        <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
       </div>
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
@@ -1902,6 +1913,32 @@ export default function App() {
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
         {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
       </div>
+      {resOpen && (
+        <div className="res-overlay" onClick={() => setResOpen(false)}>
+          <div className="res-card" onClick={(e) => e.stopPropagation()}>
+            <div className="res-head">
+              <b>資訊下載　防災／民防參考文件</b>
+              <button className="res-x" onClick={() => setResOpen(false)}>✕</button>
+            </div>
+            <div className="res-sub">連結指向各發行機關官方頁面（非本站轉存），確保為最新版本。</div>
+            {resList.length === 0 && <div className="res-sub">載入中…</div>}
+            {resList.map((r, i) => (
+              <div className="res-item" key={i}>
+                <div className="res-title">{r.title}</div>
+                {r.subtitle && <div className="res-st">{r.subtitle}</div>}
+                <div className="res-meta">{r.org}　·　{r.year}　·　{r.lang}</div>
+                <div className="res-desc">{r.desc}</div>
+                <div className="res-tags">{(r.tags || []).map((t: string, j: number) => <span className="res-tag" key={j}>{t}</span>)}</div>
+                <div className="res-links">
+                  {(r.links || []).map((l: any, j: number) => (
+                    <a className="res-link" key={j} href={l.url} target="_blank" rel="noopener noreferrer">{l.label} ↗</a>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {newsOpen && (
         <div className="news-panel">
           {CATS.map((c) => (
