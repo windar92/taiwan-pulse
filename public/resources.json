@@ -1,0 +1,33 @@
+{
+  "updated": "2026-07",
+  "note": "以下為公開的防災／民防參考文件，連結指向各發行機關官方頁面（非本站轉存），以確保為最新版本。",
+  "resources": [
+    {
+      "title": "臺灣全民安全指引（小橘書）",
+      "subtitle": "《當危機來臨時：臺灣全民安全指引》",
+      "org": "國防部 全民防衛動員署（ADMA）",
+      "year": "2025",
+      "lang": "中文",
+      "desc": "2025 年 9 月發布、依發放選舉公報模式普發全國約 980 萬家戶的民防手冊。涵蓋地震、海嘯、颱風等天然災害整備，並首次納入戰爭情境下遇敵、避難、緊急聯絡、物資準備與求生的應變指引。共約 36 頁。",
+      "tags": ["民防", "全社會韌性", "天然災害", "戰時應變"],
+      "links": [
+        { "label": "PDF 下載（二版一刷）", "url": "https://adma.mnd.gov.tw/files/web/191/file_up/100004/67/%E7%95%B6%E5%8D%B1%E6%A9%9F%E4%BE%86%E8%87%A8%E6%99%82%EF%BC%9A%E8%87%BA%E7%81%A3%E5%85%A8%E6%B0%91%E5%AE%89%E5%85%A8%E6%8C%87%E5%BC%95(%E4%BA%8C%E7%89%88%E4%B8%80%E5%88%B7).pdf" },
+        { "label": "線上互動版", "url": "https://prepare.mnd.gov.tw/" },
+        { "label": "全動署下載專區", "url": "https://adma.mnd.gov.tw/unit/100004/8" }
+      ]
+    },
+    {
+      "title": "臺灣災害管理參考手冊 2026",
+      "subtitle": "Taiwan Disaster Management Reference Handbook",
+      "org": "美國 CFE-DMHA 災害管理與人道救援卓越中心（隸屬美國印太司令部）",
+      "year": "2026",
+      "lang": "英文",
+      "desc": "2026 年 4 月發布，從美方視角完整拆解台灣防災、民防到全社會韌性的骨架：九二一後的「單一災害主管制」（消防署扛風震災、各部會分工）、2024 起推動的「全社會防衛韌性委員會」、由排練式演練轉向無腳本實戰整備、台美人道救災合作機制（CFE-DM ↔ 國家災害防救科技中心 NCDR）、以及人口高齡化的社會脆弱性。適合 planner／研究者當案頭參考書。",
+      "tags": ["防災體系", "全社會韌性", "台美合作", "英文"],
+      "links": [
+        { "label": "PDF 下載", "url": "https://www.cfe-dmha.org/LinkClick.aspx?fileticket=rIOpmA8KMHs%3D&portalid=0" },
+        { "label": "CFE-DMHA 手冊總覽頁", "url": "https://www.cfe-dmha.org/Publications/Disaster-Management-Reference-Handbooks" }
+      ]
+    }
+  ]
+}
