@@ -72,6 +72,10 @@ export default function App() {
   const [memoSaved, setMemoSaved] = useState(false);
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap">("dark");
   const [landslideOn, setLandslideOn] = useState(false);
+  const [shadeOn, setShadeOn] = useState(false); // 光達地形暈渲
+  const [treesOn, setTreesOn] = useState(false); // 巨木地圖
+  const [treesInfo, setTreesInfo] = useState("");
+  const treesPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -432,7 +436,8 @@ export default function App() {
     else if (mode === "nphoto") setGibsInfo("正射影像　來源：內政部國土測繪中心 NLSC（台灣航照正射，山區細節較 Mapbox 空照清楚）");
     else if (mode === "nmap") setGibsInfo("電子地圖(含等高線)　來源：內政部國土測繪中心 NLSC 通用版電子地圖 EMAP5");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
-    if (landslideOn) landslideToTop(); // 換底圖後把山崩地滑疊圖推回最上層
+    if (shadeOn) shadeToTop();
+    if (landslideOn) landslideToTop(); // 換底圖後把疊圖推回最上層
     // 海陸輪廓線只用於「紅外雲圖 / 衛星空照圖」這兩種看不出海陸界線的底圖；
     // 其餘底圖自動隱藏(狀態保留，切回雲圖/空照時自動恢復)。
     const coastable = mode === "gibs" || mode === "vis";
@@ -466,6 +471,70 @@ export default function App() {
     setGibsInfo(on
       ? "山崩與地滑地質敏感區　來源：經濟部地礦中心（收錄111年以前記錄之崩塌滑坡區）。建議搭配『正射』或『等高線』底圖判讀高風險邊坡；紅／橘區＝敏感區，僅供行前參考、非即時災情。"
       : "");
+  }
+  // 光達地形暈渲(20m 多向陰影圖，讓稜線/溪谷/崩溝立體感更細)。同為山崩雲圖磚，注意 z/x/y
+  function shadeToTop() {
+    const m = mapRef.current; if (!m || !m.getLayer("shade-lyr")) return;
+    // 疊在基本地形之上、但在其他資料點與山崩疊圖之下
+    const beforeId = m.getLayer("landslide-lyr") ? "landslide-lyr" : (m.getLayer("intel-pts") ? "intel-pts" : undefined);
+    if (beforeId) m.moveLayer("shade-lyr", beforeId); else m.moveLayer("shade-lyr");
+  }
+  function toggleShade() {
+    const m = mapRef.current; if (!m) return;
+    const on = !shadeOn;
+    if (!m.getSource("shade-src")) {
+      m.addSource("shade-src", { type: "raster", tiles: ["https://landslide.geologycloud.tw/jlwmts/jetlink/Shadw20/GoogleMapsCompatible/{z}/{x}/{y}"], tileSize: 256, attribution: "經濟部地礦中心 · 全島數值地形多向陰影圖(20m 光達)" });
+      m.addLayer({ id: "shade-lyr", type: "raster", source: "shade-src", paint: { "raster-opacity": 0.5 }, layout: { visibility: "none" } }, m.getLayer("landslide-lyr") ? "landslide-lyr" : (m.getLayer("intel-pts") ? "intel-pts" : undefined));
+    }
+    m.setLayoutProperty("shade-lyr", "visibility", on ? "visible" : "none");
+    if (on) shadeToTop();
+    setShadeOn(on);
+    setGibsInfo(on ? "光達地形暈渲　來源：經濟部地礦中心 全島數值地形多向陰影圖(20m)。半透明疊在底圖上，強化稜線、溪谷、崩溝立體感；搭配『等高線』或『原始』底圖效果最佳。" : "");
+  }
+  // 台灣巨木地圖(找樹的人/成大 空載光達，樹高>65m 候選巨木)
+  async function toggleTrees() {
+    const m = mapRef.current; if (!m) return;
+    const on = !treesOn;
+    if (!on) { if (m.getLayer("tree-pt")) m.setLayoutProperty("tree-pt", "visibility", "none"); treesPopRef.current?.remove(); setTreesOn(false); setTreesInfo(""); return; }
+    setTreesOn(true); setTreesInfo("巨木地圖載入中…");
+    try {
+      const d = await fetch("/giant-trees.json").then((r) => r.json());
+      if (!(d.trees || []).length) { setTreesInfo("巨木資料暫無"); return; }
+      const fc = { type: "FeatureCollection", features: d.trees.map((t: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [t.lon, t.lat] }, properties: { id: t.id, h: t.h, name: t.name, elev: t.extra?.elev_m ?? "", status: t.extra?.status || "potential", species: t.extra?.species || "", dbh: t.extra?.DBH || t.extra?.dbh || "", pic: t.extra?.pic_url || "", video: t.extra?.video_url || "" } })) } as any;
+      if (m.getSource("tree-src")) (m.getSource("tree-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("tree-src", { type: "geojson", data: fc });
+        m.addLayer({
+          id: "tree-pt", type: "circle", source: "tree-src",
+          paint: {
+            // 樹高越高越紅；已確認的畫大一點
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, ["case", ["==", ["get", "status"], "confirmed"], 5, 3], 12, ["case", ["==", ["get", "status"], "confirmed"], 9, 6]],
+            "circle-color": ["interpolate", ["linear"], ["get", "h"], 65, "#a5d6a7", 70, "#66bb6a", 75, "#fdd835", 80, "#fb8c00", 85, "#e53935"],
+            "circle-stroke-width": ["case", ["==", ["get", "status"], "confirmed"], 2, 0.8],
+            "circle-stroke-color": ["case", ["==", ["get", "status"], "confirmed"], "#ffffff", "#14300f"],
+            "circle-opacity": 0.92,
+          },
+        });
+        m.on("mouseenter", "tree-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "tree-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "tree-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          treesPopRef.current?.remove();
+          const confirmed = p.status === "confirmed";
+          const picHtml = p.pic ? `<br/><img src="${p.pic}" style="width:260px;max-width:70vw;border-radius:6px;margin-top:5px" onerror="this.style.display='none'"/>` : "";
+          const vid = p.video ? `<br/><a href="${p.video}" target="_blank" rel="noopener" style="color:#7ec8ff;font-size:11.5px">影片 ↗</a>` : "";
+          const spec = p.species ? `　樹種：${p.species}` : "";
+          const dbh = p.dbh ? `　胸徑：${p.dbh}` : "";
+          treesPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "290px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>🌲 ${p.name} 巨木</b> <span style="opacity:.7;font-size:11px">${confirmed ? "已現場確認" : "光達候選"}</span><br/>樹高約 <b>${Number(p.h).toFixed(1)} m</b>　海拔 ${p.elev} m${spec}${dbh}${picHtml}${vid}<br/><span style="opacity:.6;font-size:11px">找樹的人·空載光達推估樹冠頂點，非導覽座標；原始林無路徑，請勿貿然前往</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("tree-pt", "visibility", "visible");
+      const conf = d.trees.filter((t: any) => t.extra?.status === "confirmed").length;
+      const maxH = Math.max(...d.trees.map((t: any) => t.h || 0));
+      setTreesInfo(`台灣巨木地圖 ${d.trees.length} 株（棲蘭/丹大·空載光達樹高>65m 候選，其中 ${conf} 株已現場確認）　最高約 ${maxH.toFixed(1)}m　點顏色＝樹高。來源：找樹的人`);
+    } catch { setTreesInfo("巨木資料載入失敗"); }
   }
 
   // 雨量站 → 六角柱(有雨的站)，高度依所選時距雨量，示意比例
@@ -1930,6 +1999,8 @@ export default function App() {
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
         <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
+        <button className={"shade-btn" + (shadeOn ? " on" : "")} onClick={toggleShade} title="光達地形暈渲(20m 多向陰影)：半透明疊在底圖上，強化稜線/溪谷立體感">🗻 地形暈渲</button>
+        <button className={"tree-btn" + (treesOn ? " on" : "")} onClick={toggleTrees} title="台灣巨木地圖(找樹的人·空載光達)：樹高>65m 候選巨木，點顏色=樹高">🌲 巨木地圖</button>
         <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
       </div>
       <div className="layer-info-col">
@@ -1949,6 +2020,7 @@ export default function App() {
         {currentsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{currentsInfo}</div>}
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
         {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
+        {treesInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{treesInfo}</div>}
       </div>
       {resOpen && (
         <div className="res-overlay" onClick={() => setResOpen(false)}>
