@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { TextLayer, SolidPolygonLayer, LineLayer } from "@deck.gl/layers";
+import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 const HOME_KEY = "tp-home";
@@ -73,9 +74,13 @@ export default function App() {
   const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap">("dark");
   const [landslideOn, setLandslideOn] = useState(false);
   const [shadeOn, setShadeOn] = useState(false); // 光達地形暈渲
+  const [slopeOn, setSlopeOn] = useState(false); // 坡度圖
   const [treesOn, setTreesOn] = useState(false); // 巨木地圖
   const [treesInfo, setTreesInfo] = useState("");
   const treesPopRef = useRef<mapboxgl.Popup | null>(null);
+  const treeDataRef = useRef<any[]>([]);
+  const [treeExag, setTreeExag] = useState(6); // 巨木立體高度誇張倍率
+  const treeExagRef = useRef(6);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -491,15 +496,75 @@ export default function App() {
     setShadeOn(on);
     setGibsInfo(on ? "光達地形暈渲　來源：經濟部地礦中心 全島數值地形多向陰影圖(20m)。半透明疊在底圖上，強化稜線、溪谷、崩溝立體感；搭配『等高線』或『原始』底圖效果最佳。" : "");
   }
+  // 坡度圖(20m 光達坡度，登山風險判讀：越陡越危險)。同山崩雲圖磚 z/x/y
+  function slopeToTop() {
+    const m = mapRef.current; if (!m || !m.getLayer("slope-lyr")) return;
+    const beforeId = m.getLayer("landslide-lyr") ? "landslide-lyr" : (m.getLayer("intel-pts") ? "intel-pts" : undefined);
+    if (beforeId) m.moveLayer("slope-lyr", beforeId); else m.moveLayer("slope-lyr");
+  }
+  function toggleSlope() {
+    const m = mapRef.current; if (!m) return;
+    const on = !slopeOn;
+    if (!m.getSource("slope-src")) {
+      m.addSource("slope-src", { type: "raster", tiles: ["https://landslide.geologycloud.tw/jlwmts/jetlink/Slp20/GoogleMapsCompatible/{z}/{x}/{y}"], tileSize: 256, attribution: "經濟部地礦中心 · 全島數值地形坡度圖(20m 光達)" });
+      m.addLayer({ id: "slope-lyr", type: "raster", source: "slope-src", paint: { "raster-opacity": 0.55 }, layout: { visibility: "none" } }, m.getLayer("intel-pts") ? "intel-pts" : undefined);
+    }
+    m.setLayoutProperty("slope-lyr", "visibility", on ? "visible" : "none");
+    if (on) slopeToTop();
+    setSlopeOn(on);
+    setGibsInfo(on ? "坡度圖　來源：經濟部地礦中心 全島數值地形坡度圖(20m 光達)。顏色越暖＝坡度越陡；登山行前評估路段陡峭度，陡坡＋雨後崩塌風險高。" : "");
+  }
+  // 錐狀(針葉樹)網格：底面圓在 z=0、頂點在 z=1，供 SimpleMeshLayer 依樹高縮放
+  function coneMesh(seg = 12) {
+    const positions: number[] = [0, 0, 0, 0, 0, 1]; // 0=底心, 1=頂點
+    const normals: number[] = [0, 0, -1, 0, 0, 1];
+    for (let i = 0; i < seg; i++) {
+      const a = (i / seg) * 2 * Math.PI, x = Math.cos(a), y = Math.sin(a);
+      positions.push(x, y, 0);
+      const n = Math.hypot(x, y, 0.5); normals.push(x / n, y / n, 0.5 / n);
+    }
+    const indices: number[] = [];
+    for (let i = 0; i < seg; i++) {
+      const cur = 2 + i, nxt = 2 + ((i + 1) % seg);
+      indices.push(1, cur, nxt); // 側面
+      indices.push(0, nxt, cur); // 底面
+    }
+    return { positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint16Array(indices) };
+  }
+  const TREE_CONE = coneMesh(14);
+  function treeColor(h: number): [number, number, number] {
+    if (h >= 80) return [229, 57, 53]; if (h >= 75) return [251, 140, 0];
+    if (h >= 70) return [124, 179, 66]; return [67, 160, 71];
+  }
+  // 以 SimpleMeshLayer 畫立體樹：底部落在該點 DEM 海拔(elev_m)，高度=樹高×誇張倍率
+  function renderTreeCones(exag: number) {
+    const trees = treeDataRef.current || [];
+    if (!trees.length) { setDeckLayers("trees3d", []); return; }
+    const layer = new SimpleMeshLayer({
+      id: "tree-cones",
+      data: trees,
+      mesh: TREE_CONE as any,
+      getPosition: (t: any) => [t.lon, t.lat, t.extra?.elev_m || 0],
+      getColor: (t: any) => [...treeColor(t.h), 235] as any,
+      // 只誇張高度(Z)；XY 半徑用真實比例(約樹高的 8%)，讓它成為細長針葉樹尖塔
+      getScale: (t: any) => [Math.max(3, t.h * 0.08), Math.max(3, t.h * 0.08), t.h * exag],
+      getOrientation: () => [0, 0, 0],
+      sizeScale: 1, pickable: false,
+      material: { ambient: 0.6, diffuse: 0.6, shininess: 32, specularColor: [40, 60, 40] },
+    });
+    setDeckLayers("trees3d", [layer]);
+  }
   // 台灣巨木地圖(找樹的人/成大 空載光達，樹高>65m 候選巨木)
   async function toggleTrees() {
     const m = mapRef.current; if (!m) return;
     const on = !treesOn;
-    if (!on) { if (m.getLayer("tree-pt")) m.setLayoutProperty("tree-pt", "visibility", "none"); treesPopRef.current?.remove(); setTreesOn(false); setTreesInfo(""); return; }
+    if (!on) { if (m.getLayer("tree-pt")) m.setLayoutProperty("tree-pt", "visibility", "none"); treesPopRef.current?.remove(); setDeckLayers("trees3d", []); setTreesOn(false); setTreesInfo(""); return; }
     setTreesOn(true); setTreesInfo("巨木地圖載入中…");
     try {
       const d = await fetch("/giant-trees.json").then((r) => r.json());
       if (!(d.trees || []).length) { setTreesInfo("巨木資料暫無"); return; }
+      treeDataRef.current = d.trees;
+      renderTreeCones(treeExagRef.current); // 立體樹
       const fc = { type: "FeatureCollection", features: d.trees.map((t: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [t.lon, t.lat] }, properties: { id: t.id, h: t.h, name: t.name, elev: t.extra?.elev_m ?? "", status: t.extra?.status || "potential", species: t.extra?.species || "", dbh: t.extra?.DBH || t.extra?.dbh || "", pic: t.extra?.pic_url || "", video: t.extra?.video_url || "" } })) } as any;
       if (m.getSource("tree-src")) (m.getSource("tree-src") as mapboxgl.GeoJSONSource).setData(fc);
       else {
@@ -2000,7 +2065,8 @@ export default function App() {
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
         <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
         <button className={"shade-btn" + (shadeOn ? " on" : "")} onClick={toggleShade} title="光達地形暈渲(20m 多向陰影)：半透明疊在底圖上，強化稜線/溪谷立體感">🗻 地形暈渲</button>
-        <button className={"tree-btn" + (treesOn ? " on" : "")} onClick={toggleTrees} title="台灣巨木地圖(找樹的人·空載光達)：樹高>65m 候選巨木，點顏色=樹高">🌲 巨木地圖</button>
+        <button className={"slope-btn" + (slopeOn ? " on" : "")} onClick={toggleSlope} title="坡度圖(20m 光達)：越暖色越陡，登山風險判讀">📐 坡度圖</button>
+        <button className={"tree-btn" + (treesOn ? " on" : "")} onClick={toggleTrees} title="台灣巨木地圖(找樹的人·空載光達)：立體樹依真實樹高，可調高度誇張度">🌲 巨木地圖</button>
         <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
       </div>
       <div className="layer-info-col">
@@ -2079,6 +2145,14 @@ export default function App() {
               <span style={{ opacity: 0.55, marginLeft: 4 }}>{camCounts[k] ?? 0}</span>
             </label>
           ))}
+        </div>
+      )}
+      {treesOn && (
+        <div className="peak-panel" style={{ top: 300 }}>
+          <label>樹高誇張 <b>{treeExag}×</b>
+            <input type="range" min={1} max={30} step={1} value={treeExag} onChange={(e) => { const v = Number(e.target.value); setTreeExag(v); treeExagRef.current = v; renderTreeCones(v); }} />
+          </label>
+          <span style={{ fontSize: 11, opacity: 0.6 }}>1×＝真實比例(遠看極小)，放大以看清立體樹</span>
         </div>
       )}
       {plaOn && (
