@@ -70,7 +70,8 @@ export default function App() {
   const [resList, setResList] = useState<any[]>([]);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
-  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis">("dark");
+  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap">("dark");
+  const [landslideOn, setLandslideOn] = useState(false);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -405,19 +406,33 @@ export default function App() {
     }
     setGibsInfo(`衛星空照圖　來源：NOAA-20 / VIIRS 可見光真彩(Corrected Reflectance) · NASA GIBS\n影像日期：${date}（極軌衛星每日過境一次；夜間無可見光，故非逐時更新）`);
   }
-  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis") {
+  // NLSC 內政部國土測繪中心 圖磚(免金鑰 WMTS，GoogleMapsCompatible)
+  function ensureNlsc(id: string, layer: string) {
+    const m = mapRef.current; if (!m || m.getLayer(id)) return;
+    m.addSource(id, { type: "raster", tiles: [`https://wmts.nlsc.gov.tw/wmts/${layer}/default/GoogleMapsCompatible/{z}/{y}/{x}`], tileSize: 256, maxzoom: 20, attribution: "內政部國土測繪中心 NLSC" });
+    const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+    m.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": 1 } }, beforeId);
+  }
+  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap") {
     const m = mapRef.current; if (!m) return;
     if (mode === "gibs") ensureGibs();
     if (mode === "vis") ensureVis();
+    if (mode === "nphoto") ensureNlsc("nphoto-lyr", "PHOTO2");
+    if (mode === "nmap") ensureNlsc("nmap-lyr", "EMAP5_OPENDATA");
     const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
     vis("sat-layer", mode === "sat");
     vis("contour-line", mode === "topo");
     vis("contour-label", mode === "topo");
-    vis("hillshade", mode !== "sat" && mode !== "gibs" && mode !== "vis"); // 衛星/空照/雲圖本身已有實景，其餘用陰影做凸起
+    vis("hillshade", mode === "dark" || mode === "topo"); // 有實景/電子地圖的底圖不需陰影
     vis("gibs-sat", mode === "gibs");
     vis("vis-sat", mode === "vis");
+    vis("nphoto-lyr", mode === "nphoto");
+    vis("nmap-lyr", mode === "nmap");
     if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
+    else if (mode === "nphoto") setGibsInfo("正射影像　來源：內政部國土測繪中心 NLSC（台灣航照正射，山區細節較 Mapbox 空照清楚）");
+    else if (mode === "nmap") setGibsInfo("電子地圖(含等高線)　來源：內政部國土測繪中心 NLSC 通用版電子地圖 EMAP5");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
+    if (landslideOn) landslideToTop(); // 換底圖後把山崩地滑疊圖推回最上層
     // 海陸輪廓線只用於「紅外雲圖 / 衛星空照圖」這兩種看不出海陸界線的底圖；
     // 其餘底圖自動隱藏(狀態保留，切回雲圖/空照時自動恢復)。
     const coastable = mode === "gibs" || mode === "vis";
@@ -428,8 +443,29 @@ export default function App() {
     setBasemap(mode);
   }
   function cycleBasemap() {
-    const order = ["dark", "topo", "sat", "gibs", "vis"] as const;
+    const order = ["dark", "topo", "sat", "nphoto", "nmap", "gibs", "vis"] as const;
     applyBasemap(order[(order.indexOf(basemap as any) + 1) % order.length]);
+  }
+  // 山崩與地滑地質敏感區疊圖(經濟部地礦中心「山崩雲」WMTS，注意圖磚順序為 z/x/y)
+  function landslideToTop() {
+    const m = mapRef.current; if (!m || !m.getLayer("landslide-lyr")) return;
+    const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+    if (beforeId) m.moveLayer("landslide-lyr", beforeId); else m.moveLayer("landslide-lyr");
+  }
+  function toggleLandslide() {
+    const m = mapRef.current; if (!m) return;
+    const on = !landslideOn;
+    if (!m.getSource("landslide-src")) {
+      m.addSource("landslide-src", { type: "raster", tiles: ["https://landslide.geologycloud.tw/jlwmts/jetlink/SensitiveArea/GoogleMapsCompatibl/{z}/{x}/{y}"], tileSize: 256, attribution: "經濟部地質調查及礦業管理中心 · 山崩與地滑地質敏感區" });
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "landslide-lyr", type: "raster", source: "landslide-src", paint: { "raster-opacity": 0.55 }, layout: { visibility: "none" } }, beforeId);
+    }
+    m.setLayoutProperty("landslide-lyr", "visibility", on ? "visible" : "none");
+    if (on) landslideToTop();
+    setLandslideOn(on);
+    setGibsInfo(on
+      ? "山崩與地滑地質敏感區　來源：經濟部地礦中心（收錄111年以前記錄之崩塌滑坡區）。建議搭配『正射』或『等高線』底圖判讀高風險邊坡；紅／橘區＝敏感區，僅供行前參考、非即時災情。"
+      : "");
   }
 
   // 雨量站 → 六角柱(有雨的站)，高度依所選時距雨量，示意比例
@@ -1835,7 +1871,7 @@ export default function App() {
       try { const d = await fetch("/resources.json").then((r) => r.json()); setResList(d.resources || []); } catch { /* ignore */ }
     }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", nphoto: "正射(NLSC)", nmap: "電子地圖(NLSC)", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -1893,6 +1929,7 @@ export default function App() {
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
+        <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
         <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
       </div>
       <div className="layer-info-col">
