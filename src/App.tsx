@@ -78,8 +78,8 @@ export default function App() {
   const [treesInfo, setTreesInfo] = useState("");
   const treesPopRef = useRef<mapboxgl.Popup | null>(null);
   const treeDataRef = useRef<any[]>([]);
-  const [treeExag, setTreeExag] = useState(6); // 巨木立體高度誇張倍率
-  const treeExagRef = useRef(6);
+  const [treeExag, setTreeExag] = useState(2); // 巨木立體高度誇張倍率(2×附近最像樹)
+  const treeExagRef = useRef(2);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -517,25 +517,36 @@ export default function App() {
     if (h >= 80) return [229, 57, 53]; if (h >= 75) return [251, 140, 0];
     if (h >= 70) return [124, 179, 66]; return [67, 160, 71];
   }
-  // 立體樹：以 SolidPolygonLayer 擠出「八角柱尖塔」(比照堰塞湖的實心柱做法，保證渲染)。
-  // 底面落在該點 DEM 海拔 elev_m，高度=樹高×誇張倍率；柱身細長(半徑約樹高5%)呈針葉樹尖塔感。
+  // 立體樹(聖誕樹造型)：用 SolidPolygonLayer 疊「由下而上半徑遞減」的多層八角柱，做出階梯錐形。
+  // 每層都從 z=0 擠到各自的絕對塔頂；下寬上窄 → 露出地面的輪廓呈針葉樹/聖誕樹的階梯錐形。
+  const TREE_TIERS = [
+    { top: 0.10, r: 0.18 }, // 露出地面的樹幹感(最下、最細)
+    { top: 0.45, r: 1.0 },  // 底層樹冠(最寬)
+    { top: 0.72, r: 0.62 }, // 中層
+    { top: 1.0, r: 0.30 },  // 頂層(最窄，收尖)
+  ];
+  function octRing(lon: number, lat: number, rMeters: number) {
+    const MPD = 111320, dLat = rMeters / MPD, dLon = rMeters / (MPD * Math.cos((lat * Math.PI) / 180));
+    const ring: number[][] = [];
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * 2 * Math.PI; ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]); }
+    ring.push(ring[0]); return [ring];
+  }
   function renderTreeCones(exag: number) {
     const trees = treeDataRef.current || [];
     if (!trees.length) { setDeckLayers("trees3d", []); return; }
-    const MPD = 111320; // 每緯度度數約公尺
-    const data = trees.map((t: any) => {
+    const data: any[] = [];
+    for (const t of trees) {
       const base = t.extra?.elev_m || 0;
-      const r = Math.max(3, t.h * 0.05);
-      const dLat = r / MPD, dLon = r / (MPD * Math.cos((t.lat * Math.PI) / 180));
-      const ring: number[][] = [];
-      for (let i = 0; i < 8; i++) { const a = (i / 8) * 2 * Math.PI; ring.push([t.lon + dLon * Math.cos(a), t.lat + dLat * Math.sin(a)]); }
-      ring.push(ring[0]);
-      // SolidPolygonLayer 由 z=0 擠到 getElevation(絕對高程)；塔頂=地面海拔+樹高×誇張，
-      // 地面以下被地形遮住，露出地面的部分就是立體樹。
-      return { polygon: [ring], elev: base + t.h * exag, color: [...treeColor(t.h), 230] };
-    });
+      const R = Math.max(6, t.h * 0.18); // 底冠半徑(真實比例，不隨誇張放大 → 誇張時變高瘦、真實時較豐滿)
+      const col = treeColor(t.h);
+      TREE_TIERS.forEach((tier, k) => {
+        const shade = k === 0 ? 0.5 : 1 - (k - 1) * 0.12; // 樹幹偏暗、樹冠上淺下深
+        const rgb = k === 0 ? [96, 66, 40] : [Math.round(col[0] * shade), Math.round(col[1] * shade), Math.round(col[2] * shade)];
+        data.push({ polygon: octRing(t.lon, t.lat, R * tier.r), elev: base + t.h * exag * tier.top, color: [...rgb, 240] });
+      });
+    }
     setDeckLayers("trees3d", [new SolidPolygonLayer({
-      id: "tree-spires", data,
+      id: "tree-xmas", data,
       getPolygon: (d: any) => d.polygon, extruded: true,
       getElevation: (d: any) => d.elev, getFillColor: (d: any) => d.color,
       material: false, pickable: false,
