@@ -570,15 +570,24 @@ export default function App() {
     </svg>`.replace(/\s+/g, " ")
   );
   function renderTreeCones(exag: number) {
+    const m = mapRef.current;
     const trees = treeDataRef.current || [];
     if (!trees.length) { setDeckLayers("trees3d", []); return; }
+    // 落地高度以「Mapbox 實際地形」為準(而非資料的 elev_m，兩者 DEM 有落差會導致樹被埋)；
+    // 地形磚未載入時退回 elev_m。加 1m 微抬避免與地面 z-fighting。
+    const data = trees.map((t: any) => {
+      let z = m ? (m.queryTerrainElevation([t.lon, t.lat], { exaggerated: true }) as number) : null;
+      if (z == null || !Number.isFinite(z)) z = t.extra?.elev_m || 0;
+      return { lon: t.lon, lat: t.lat, h: t.h, z: z + 1 };
+    });
     setDeckLayers("trees3d", [new IconLayer({
       id: "tree-icons",
-      data: trees,
-      getPosition: (t: any) => [t.lon, t.lat, t.extra?.elev_m || 0],
+      data,
+      getPosition: (d: any) => [d.lon, d.lat, d.z],
       getIcon: () => ({ url: TREE_SVG, width: 120, height: 170, anchorX: 60, anchorY: 170, mask: false }),
-      getSize: (t: any) => t.h * exag, // 樹高(公尺)×誇張倍率
+      getSize: (d: any) => d.h * exag, // 樹高(公尺)×誇張倍率
       sizeUnits: "meters", billboard: true, sizeMinPixels: 10, pickable: false,
+      updateTriggers: { getSize: exag }, // 誇張倍率改變時強制 deck 重算大小
     })]);
   }
   // 台灣巨木地圖(找樹的人/成大 空載光達，樹高>65m 候選巨木)
