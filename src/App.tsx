@@ -528,9 +528,11 @@ export default function App() {
       const r = Math.max(3, t.h * 0.05);
       const dLat = r / MPD, dLon = r / (MPD * Math.cos((t.lat * Math.PI) / 180));
       const ring: number[][] = [];
-      for (let i = 0; i < 8; i++) { const a = (i / 8) * 2 * Math.PI; ring.push([t.lon + dLon * Math.cos(a), t.lat + dLat * Math.sin(a), base]); }
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * 2 * Math.PI; ring.push([t.lon + dLon * Math.cos(a), t.lat + dLat * Math.sin(a)]); }
       ring.push(ring[0]);
-      return { polygon: [ring], elev: t.h * exag, color: [...treeColor(t.h), 230] };
+      // SolidPolygonLayer 由 z=0 擠到 getElevation(絕對高程)；塔頂=地面海拔+樹高×誇張，
+      // 地面以下被地形遮住，露出地面的部分就是立體樹。
+      return { polygon: [ring], elev: base + t.h * exag, color: [...treeColor(t.h), 230] };
     });
     setDeckLayers("trees3d", [new SolidPolygonLayer({
       id: "tree-spires", data,
