@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import mapboxgl from "mapbox-gl";
 import { MapboxOverlay } from "@deck.gl/mapbox";
 import { TextLayer, SolidPolygonLayer, LineLayer } from "@deck.gl/layers";
-import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 
 const TOKEN = import.meta.env.VITE_MAPBOX_TOKEN as string;
 const HOME_KEY = "tp-home";
@@ -514,45 +513,31 @@ export default function App() {
     setSlopeOn(on);
     setGibsInfo(on ? "坡度圖　來源：經濟部地礦中心 全島數值地形坡度圖(20m 光達)。顏色越暖＝坡度越陡；登山行前評估路段陡峭度，陡坡＋雨後崩塌風險高。" : "");
   }
-  // 錐狀(針葉樹)網格：底面圓在 z=0、頂點在 z=1，供 SimpleMeshLayer 依樹高縮放
-  function coneMesh(seg = 12) {
-    const positions: number[] = [0, 0, 0, 0, 0, 1]; // 0=底心, 1=頂點
-    const normals: number[] = [0, 0, -1, 0, 0, 1];
-    for (let i = 0; i < seg; i++) {
-      const a = (i / seg) * 2 * Math.PI, x = Math.cos(a), y = Math.sin(a);
-      positions.push(x, y, 0);
-      const n = Math.hypot(x, y, 0.5); normals.push(x / n, y / n, 0.5 / n);
-    }
-    const indices: number[] = [];
-    for (let i = 0; i < seg; i++) {
-      const cur = 2 + i, nxt = 2 + ((i + 1) % seg);
-      indices.push(1, cur, nxt); // 側面
-      indices.push(0, nxt, cur); // 底面
-    }
-    return { positions: new Float32Array(positions), normals: new Float32Array(normals), indices: new Uint16Array(indices) };
-  }
-  const TREE_CONE = coneMesh(14);
   function treeColor(h: number): [number, number, number] {
     if (h >= 80) return [229, 57, 53]; if (h >= 75) return [251, 140, 0];
     if (h >= 70) return [124, 179, 66]; return [67, 160, 71];
   }
-  // 以 SimpleMeshLayer 畫立體樹：底部落在該點 DEM 海拔(elev_m)，高度=樹高×誇張倍率
+  // 立體樹：以 SolidPolygonLayer 擠出「八角柱尖塔」(比照堰塞湖的實心柱做法，保證渲染)。
+  // 底面落在該點 DEM 海拔 elev_m，高度=樹高×誇張倍率；柱身細長(半徑約樹高5%)呈針葉樹尖塔感。
   function renderTreeCones(exag: number) {
     const trees = treeDataRef.current || [];
     if (!trees.length) { setDeckLayers("trees3d", []); return; }
-    const layer = new SimpleMeshLayer({
-      id: "tree-cones",
-      data: trees,
-      mesh: TREE_CONE as any,
-      getPosition: (t: any) => [t.lon, t.lat, t.extra?.elev_m || 0],
-      getColor: (t: any) => [...treeColor(t.h), 235] as any,
-      // 只誇張高度(Z)；XY 半徑用真實比例(約樹高的 8%)，讓它成為細長針葉樹尖塔
-      getScale: (t: any) => [Math.max(3, t.h * 0.08), Math.max(3, t.h * 0.08), t.h * exag],
-      getOrientation: () => [0, 0, 0],
-      sizeScale: 1, pickable: false,
-      material: { ambient: 0.6, diffuse: 0.6, shininess: 32, specularColor: [40, 60, 40] },
+    const MPD = 111320; // 每緯度度數約公尺
+    const data = trees.map((t: any) => {
+      const base = t.extra?.elev_m || 0;
+      const r = Math.max(3, t.h * 0.05);
+      const dLat = r / MPD, dLon = r / (MPD * Math.cos((t.lat * Math.PI) / 180));
+      const ring: number[][] = [];
+      for (let i = 0; i < 8; i++) { const a = (i / 8) * 2 * Math.PI; ring.push([t.lon + dLon * Math.cos(a), t.lat + dLat * Math.sin(a), base]); }
+      ring.push(ring[0]);
+      return { polygon: [ring], elev: t.h * exag, color: [...treeColor(t.h), 230] };
     });
-    setDeckLayers("trees3d", [layer]);
+    setDeckLayers("trees3d", [new SolidPolygonLayer({
+      id: "tree-spires", data,
+      getPolygon: (d: any) => d.polygon, extruded: true,
+      getElevation: (d: any) => d.elev, getFillColor: (d: any) => d.color,
+      material: false, pickable: false,
+    })]);
   }
   // 台灣巨木地圖(找樹的人/成大 空載光達，樹高>65m 候選巨木)
   async function toggleTrees() {
