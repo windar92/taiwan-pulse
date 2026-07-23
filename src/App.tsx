@@ -70,7 +70,7 @@ export default function App() {
   const [resList, setResList] = useState<any[]>([]);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
-  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap">("dark");
+  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy">("dark");
   const [landslideOn, setLandslideOn] = useState(false);
   const [shadeOn, setShadeOn] = useState(false); // 光達地形暈渲
   const [slopeOn, setSlopeOn] = useState(false); // 坡度圖
@@ -80,6 +80,8 @@ export default function App() {
   const treeDataRef = useRef<any[]>([]);
   const [treeExag, setTreeExag] = useState(2); // 巨木立體高度誇張倍率(2×附近最像樹)
   const treeExagRef = useRef(2);
+  const [wfOn, setWfOn] = useState(false); const [wfInfo, setWfInfo] = useState(""); const wfPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [hsOn, setHsOn] = useState(false); const [hsInfo, setHsInfo] = useState(""); const hsPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -421,12 +423,20 @@ export default function App() {
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": 1 } }, beforeId);
   }
-  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap") {
+  // 魯地圖(臺灣 MOI.OSM，民間戶外/登山地圖，免金鑰圖磚；步道畫得細)
+  function ensureRudy() {
+    const m = mapRef.current; if (!m || m.getLayer("rudy-lyr")) return;
+    m.addSource("rudy-src", { type: "raster", tiles: ["https://tile.happyman.idv.tw/map/moi_osm/{z}/{x}/{y}.png"], tileSize: 256, maxzoom: 16, attribution: "魯地圖 Rudy Map · © OpenStreetMap contributors" });
+    const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+    m.addLayer({ id: "rudy-lyr", type: "raster", source: "rudy-src", paint: { "raster-opacity": 1 } }, beforeId);
+  }
+  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy") {
     const m = mapRef.current; if (!m) return;
     if (mode === "gibs") ensureGibs();
     if (mode === "vis") ensureVis();
     if (mode === "nphoto") ensureNlsc("nphoto-lyr", "PHOTO2");
     if (mode === "nmap") ensureNlsc("nmap-lyr", "EMAP5_OPENDATA");
+    if (mode === "rudy") ensureRudy();
     const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
     vis("sat-layer", mode === "sat");
     vis("contour-line", mode === "topo");
@@ -436,9 +446,11 @@ export default function App() {
     vis("vis-sat", mode === "vis");
     vis("nphoto-lyr", mode === "nphoto");
     vis("nmap-lyr", mode === "nmap");
+    vis("rudy-lyr", mode === "rudy");
     if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
     else if (mode === "nphoto") setGibsInfo("正射影像　來源：內政部國土測繪中心 NLSC（台灣航照正射，山區細節較 Mapbox 空照清楚）");
     else if (mode === "nmap") setGibsInfo("電子地圖(含等高線)　來源：內政部國土測繪中心 NLSC 通用版電子地圖 EMAP5");
+    else if (mode === "rudy") setGibsInfo("魯地圖(戶外/登山)　來源：魯地圖 Rudy Map · © OpenStreetMap contributors。台灣登山圈常用，步道/山屋/水源標得細；為渲染圖磚，無法點選單一步道。");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
     if (shadeOn) shadeToTop();
     if (landslideOn) landslideToTop(); // 換底圖後把疊圖推回最上層
@@ -452,7 +464,7 @@ export default function App() {
     setBasemap(mode);
   }
   function cycleBasemap() {
-    const order = ["dark", "topo", "sat", "nphoto", "nmap", "gibs", "vis"] as const;
+    const order = ["dark", "topo", "sat", "nphoto", "nmap", "rudy", "gibs", "vis"] as const;
     applyBasemap(order[(order.indexOf(basemap as any) + 1) % order.length]);
   }
   // 山崩與地滑地質敏感區疊圖(經濟部地礦中心「山崩雲」WMTS，注意圖磚順序為 z/x/y)
@@ -512,6 +524,40 @@ export default function App() {
     if (on) slopeToTop();
     setSlopeOn(on);
     setGibsInfo(on ? "坡度圖　來源：經濟部地礦中心 全島數值地形坡度圖(20m 光達)。顏色越暖＝坡度越陡；登山行前評估路段陡峭度，陡坡＋雨後崩塌風險高。" : "");
+  }
+  // 通用 POI 點圖層(瀑布/溫泉，資料來源：小飛 Google My Maps)
+  async function togglePoi(kind: "wf" | "hs") {
+    const m = mapRef.current; if (!m) return;
+    const cfg = kind === "wf"
+      ? { on: wfOn, setOn: setWfOn, setInfo: setWfInfo, pop: wfPopRef, id: "wf-pt", url: "/waterfalls.json", color: "#29b6f6", stroke: "#08324a", label: "野溪瀑布", icon: "💧", src: "跟著小飛玩 Follow Xiaofei" }
+      : { on: hsOn, setOn: setHsOn, setInfo: setHsInfo, pop: hsPopRef, id: "hs-pt", url: "/hotsprings.json", color: "#ff7043", stroke: "#4a1c08", label: "野溪溫泉", icon: "♨", src: "跟著小飛玩 Follow Xiaofei" };
+    const on = !cfg.on;
+    if (!on) { if (m.getLayer(cfg.id)) m.setLayoutProperty(cfg.id, "visibility", "none"); cfg.pop.current?.remove(); cfg.setOn(false); cfg.setInfo(""); return; }
+    cfg.setOn(true); cfg.setInfo(cfg.label + "載入中…");
+    try {
+      const d = await fetch(cfg.url).then((r) => r.json());
+      if (!(d.points || []).length) { cfg.setInfo(cfg.label + "暫無"); return; }
+      const fc = { type: "FeatureCollection", features: d.points.map((p: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [p.lon, p.lat] }, properties: { name: p.name, desc: p.desc || "" } })) } as any;
+      const srcId = cfg.id + "-src";
+      if (m.getSource(srcId)) (m.getSource(srcId) as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource(srcId, { type: "geojson", data: fc });
+        m.addLayer({ id: cfg.id, type: "circle", source: srcId, paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 6, 3, 12, 6], "circle-color": cfg.color, "circle-stroke-width": 1, "circle-stroke-color": cfg.stroke, "circle-opacity": 0.92 } });
+        m.on("mouseenter", cfg.id, () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", cfg.id, () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", cfg.id, (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          cfg.pop.current?.remove();
+          const urlm = (p.desc || "").match(/https?:\/\/[^\s"']+/);
+          const link = urlm ? `<br/><a href="${urlm[0]}" target="_blank" rel="noopener" style="color:#7ec8ff;font-size:11.5px">相關連結 ↗</a>` : "";
+          cfg.pop.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "280px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${cfg.icon} ${p.name || ""}</b><br/><span style="opacity:.85;font-size:12px">${(p.desc || "").replace(/https?:\/\/[^\s"']+/g, "").slice(0, 90)}</span>${link}<br/><span style="opacity:.6;font-size:11px">來源：${cfg.src}·祕境路況會變，僅供參考、請勿貿然前往</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty(cfg.id, "visibility", "visible");
+      cfg.setInfo(`${cfg.label} ${d.points.length} 處　來源：${cfg.src}（業餘整理·僅供參考，非官方導覽座標）`);
+    } catch { cfg.setInfo(cfg.label + "載入失敗"); }
   }
   function treeColor(h: number): [number, number, number] {
     if (h >= 80) return [229, 57, 53]; if (h >= 75) return [251, 140, 0];
@@ -2003,7 +2049,7 @@ export default function App() {
       try { const d = await fetch("/resources.json").then((r) => r.json()); setResList(d.resources || []); } catch { /* ignore */ }
     }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", nphoto: "正射(NLSC)", nmap: "電子地圖(NLSC)", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", nphoto: "正射(NLSC)", nmap: "電子地圖(NLSC)", rudy: "魯地圖(戶外)", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
@@ -2065,6 +2111,8 @@ export default function App() {
         <button className={"shade-btn" + (shadeOn ? " on" : "")} onClick={toggleShade} title="光達地形暈渲(20m 多向陰影)：半透明疊在底圖上，強化稜線/溪谷立體感">🗻 地形暈渲</button>
         <button className={"slope-btn" + (slopeOn ? " on" : "")} onClick={toggleSlope} title="坡度圖(20m 光達)：越暖色越陡，登山風險判讀">📐 坡度圖</button>
         <button className={"tree-btn" + (treesOn ? " on" : "")} onClick={toggleTrees} title="台灣巨木地圖(找樹的人·空載光達)：立體樹依真實樹高，可調高度誇張度">🌲 巨木地圖</button>
+        <button className={"wf-btn" + (wfOn ? " on" : "")} onClick={() => togglePoi("wf")} title="野溪瀑布(跟著小飛玩)：業餘整理祕境點位，僅供參考">💧 瀑布</button>
+        <button className={"hs-btn" + (hsOn ? " on" : "")} onClick={() => togglePoi("hs")} title="野溪溫泉(跟著小飛玩)：業餘整理祕境點位，僅供參考">♨ 野溪溫泉</button>
         <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
       </div>
       <div className="layer-info-col">
@@ -2085,6 +2133,8 @@ export default function App() {
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
         {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
         {treesInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{treesInfo}</div>}
+        {wfInfo && <div className="li">{wfInfo}</div>}
+        {hsInfo && <div className="li">{hsInfo}</div>}
       </div>
       {resOpen && (
         <div className="res-overlay" onClick={() => setResOpen(false)}>
