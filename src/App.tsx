@@ -2057,8 +2057,8 @@ export default function App() {
     <>
       <div id="map" ref={containerRef} />
       <div className="brand">
-        <strong>台灣情報脈動</strong>
-        <span>各地即時消息與公部門公開資料</span>
+        <strong>The Almanac　島嶼年鑑</strong>
+        <span>Island Weather, Alerts &amp; News · 台灣各層面即時公開資料</span>
         <span className="brand-range">新聞與公告：近 7 天　·　群眾回報：近 14 天</span>
       </div>
 
