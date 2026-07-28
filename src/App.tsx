@@ -1408,6 +1408,14 @@ export default function App() {
     for (let i = 0; i < stops.length - 1; i++) { const [a, ca] = stops[i], [b, cb] = stops[i + 1]; if (t >= a && t <= b) { const f = (t - a) / (b - a); return [0, 1, 2].map((k) => Math.round(ca[k] + (cb[k] - ca[k]) * f)); } }
     return stops[stops.length - 1][1];
   }
+  // 海流流速色階(m/s)：藍→青→綠→黃→紅，把黑潮這種強流拉出來
+  function curColor(s: number): [number, number, number] {
+    const stops: [number, number[]][] = [[0, [40, 96, 200]], [0.3, [0, 190, 220]], [0.6, [60, 205, 110]], [0.9, [240, 215, 50]], [1.2, [240, 70, 40]], [1.6, [170, 0, 40]]];
+    if (s <= stops[0][0]) return stops[0][1] as [number, number, number];
+    if (s >= stops[stops.length - 1][0]) return stops[stops.length - 1][1] as [number, number, number];
+    for (let i = 0; i < stops.length - 1; i++) { const [a, ca] = stops[i], [b, cb] = stops[i + 1]; if (s >= a && s <= b) { const f = (s - a) / (b - a); return [0, 1, 2].map((k) => Math.round(ca[k] + (cb[k] - ca[k]) * f)) as [number, number, number]; } }
+    return stops[stops.length - 1][1] as [number, number, number];
+  }
   // 麥卡托 y 與其反函數(image source 是以麥卡托線性貼圖，跨大緯度必須照麥卡托列距取樣，否則會嚴重錯位)
   const mercY = (lat: number) => Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI) / 360));
   const invMercY = (y: number) => ((2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180) / Math.PI;
@@ -1950,27 +1958,24 @@ export default function App() {
       if (!d.ok || !(d.vecs || []).length) { setCurrentsInfo("海流資料暫無"); return; }
       const K = 0.6; // 箭頭長度倍率(度/(m/s))
       const shafts: any[] = [], heads: any[] = [];
-      const col = (s: number): [number, number, number] => {
-        const t = Math.min(s / 1.2, 1);
-        return [Math.round(90 + 165 * t), Math.round(180 - 120 * t), Math.round(255 - 200 * t)];
-      };
       for (const v of d.vecs) {
         const len = Math.min(v.s, 1.5) * K;
         const ang = Math.atan2(v.v, v.u);
         const cosL = Math.max(0.2, Math.cos((v.lat * Math.PI) / 180));
         const ex = v.lon + (len * Math.cos(ang)) / cosL, ey = v.lat + len * Math.sin(ang);
-        const c = col(v.s);
-        shafts.push({ s: [v.lon, v.lat], t: [ex, ey], c });
+        const c = curColor(v.s);
+        const w = 1.1 + Math.min(v.s, 1.5) * 1.7; // 流速越快線越粗，黑潮更突出
+        shafts.push({ s: [v.lon, v.lat], t: [ex, ey], c, w });
         // 兩根倒刺
         const bl = len * 0.32;
         for (const da of [Math.PI * 0.82, -Math.PI * 0.82]) {
           const bx = ex + (bl * Math.cos(ang + da)) / cosL, by = ey + bl * Math.sin(ang + da);
-          heads.push({ s: [ex, ey], t: [bx, by], c });
+          heads.push({ s: [ex, ey], t: [bx, by], c, w });
         }
       }
       setDeckLayers("currents", [
-        new LineLayer({ id: "cur-shaft", data: shafts, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 220], getWidth: 1.4, widthUnits: "pixels" }),
-        new LineLayer({ id: "cur-head", data: heads, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 220], getWidth: 1.4, widthUnits: "pixels" }),
+        new LineLayer({ id: "cur-shaft", data: shafts, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 230], getWidth: (d: any) => d.w, widthUnits: "pixels", widthMinPixels: 1 }),
+        new LineLayer({ id: "cur-head", data: heads, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 230], getWidth: (d: any) => d.w, widthUnits: "pixels", widthMinPixels: 1 }),
       ]);
       setCurrentsOn(true);
       setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
@@ -2246,6 +2251,12 @@ export default function App() {
         <div className="sst-legend">
           <span className="qlg-title">海溫°C</span>
           {[22, 24, 26, 28, 30, 32].map((t) => (<span key={t} className="qlg-sw" style={{ background: `rgb(${sstColor(t).join(",")})` }}>{t}</span>))}
+        </div>
+      )}
+      {currentsOn && (
+        <div className="sst-legend">
+          <span className="qlg-title">流速 m/s</span>
+          {[0.15, 0.45, 0.75, 1.05, 1.35].map((s) => (<span key={s} className="qlg-sw" style={{ background: `rgb(${curColor(s).join(",")})` }}>{s.toFixed(1)}</span>))}
         </div>
       )}
 
