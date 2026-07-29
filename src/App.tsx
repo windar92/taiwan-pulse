@@ -569,6 +569,13 @@ export default function App() {
       <polygon points='60,78 8,150 112,150' fill='#3fa34d'/>
     </svg>`.replace(/\s+/g, " ")
   );
+  // 海流箭頭圖示：一根「白色實心錐形箭頭」(指向 +x/東)，用 mask 讓 getColor 依流速上色。
+  // 比細線好看很多：邊緣平滑、比例一致、放大不糊。
+  const ARROW_SVG = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+      <path d='M6 44 L58 44 L58 28 L96 50 L58 72 L58 56 L6 56 Z' fill='#fff'/>
+    </svg>`.replace(/\s+/g, " ")
+  );
   function renderTreeCones(exag: number) {
     const m = mapRef.current;
     const trees = treeDataRef.current || [];
@@ -1956,26 +1963,24 @@ export default function App() {
     try {
       const d = await fetch("/api/live?ds=currents").then((r) => r.json());
       if (!d.ok || !(d.vecs || []).length) { setCurrentsInfo("海流資料暫無"); return; }
-      const K = 0.6; // 箭頭長度倍率(度/(m/s))
-      const shafts: any[] = [], heads: any[] = [];
-      for (const v of d.vecs) {
-        const len = Math.min(v.s, 1.5) * K;
-        const ang = Math.atan2(v.v, v.u);
-        const cosL = Math.max(0.2, Math.cos((v.lat * Math.PI) / 180));
-        const ex = v.lon + (len * Math.cos(ang)) / cosL, ey = v.lat + len * Math.sin(ang);
-        const c = curColor(v.s);
-        const w = 1.1 + Math.min(v.s, 1.5) * 1.7; // 流速越快線越粗，黑潮更突出
-        shafts.push({ s: [v.lon, v.lat], t: [ex, ey], c, w });
-        // 兩根倒刺
-        const bl = len * 0.32;
-        for (const da of [Math.PI * 0.82, -Math.PI * 0.82]) {
-          const bx = ex + (bl * Math.cos(ang + da)) / cosL, by = ey + bl * Math.sin(ang + da);
-          heads.push({ s: [ex, ey], t: [bx, by], c, w });
-        }
-      }
+      const arrows = d.vecs.map((v: any) => ({
+        pos: [v.lon, v.lat] as [number, number],
+        ang: (Math.atan2(v.v, v.u) * 180) / Math.PI, // 度，逆時針；圖示原本指東
+        c: curColor(v.s),
+        sz: 15 + Math.min(v.s, 1.5) * 15, // 流速越快箭頭越大，黑潮更醒目
+      }));
       setDeckLayers("currents", [
-        new LineLayer({ id: "cur-shaft", data: shafts, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 230], getWidth: (d: any) => d.w, widthUnits: "pixels", widthMinPixels: 1 }),
-        new LineLayer({ id: "cur-head", data: heads, getSourcePosition: (d: any) => d.s, getTargetPosition: (d: any) => d.t, getColor: (d: any) => [...d.c, 230], getWidth: (d: any) => d.w, widthUnits: "pixels", widthMinPixels: 1 }),
+        new IconLayer({
+          id: "cur-arrows",
+          data: arrows,
+          getPosition: (d: any) => d.pos,
+          getIcon: () => ({ url: ARROW_SVG, width: 100, height: 100, anchorX: 50, anchorY: 50, mask: true }),
+          getAngle: (d: any) => d.ang,
+          getColor: (d: any) => [...d.c, 235],
+          getSize: (d: any) => d.sz,
+          sizeUnits: "pixels", sizeMinPixels: 9, sizeMaxPixels: 46,
+          billboard: true, pickable: false,
+        }),
       ]);
       setCurrentsOn(true);
       setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
