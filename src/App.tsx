@@ -70,7 +70,7 @@ export default function App() {
   const [resList, setResList] = useState<any[]>([]);
   const [allLayersOn, setAllLayersOn] = useState(false);
   const [memoSaved, setMemoSaved] = useState(false);
-  const [basemap, setBasemap] = useState<"dark" | "topo" | "topobath" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy">("dark");
+  const [basemap, setBasemap] = useState<"dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy">("dark");
   const [landslideOn, setLandslideOn] = useState(false);
   const [shadeOn, setShadeOn] = useState(false); // 光達地形暈渲
   const [slopeOn, setSlopeOn] = useState(false); // 坡度圖
@@ -435,37 +435,6 @@ export default function App() {
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id, type: "raster", source: id, paint: { "raster-opacity": 1 } }, beforeId);
   }
-  // 海洋等高線(等深線)：NOAA NCEI GEBCO 2019 等深線(免金鑰 ArcGIS export，透明線條) + terrarium 海底地形(含水深)
-  function ensureSeaContour() {
-    const m = mapRef.current; if (!m) return;
-    // 含水深的地形高程來源(AWS Open Data terrarium，海底也有起伏)
-    if (!m.getSource("bath-dem")) {
-      m.addSource("bath-dem", { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 15, attribution: "AWS Terrain Tiles · GEBCO/SRTM" });
-    }
-    // 海底暈渲：用含水深的 bath-dem 做陰影，露出「抽乾海水」的裸露海底地形，清晰度接近陸地
-    if (!m.getLayer("sea-hillshade")) {
-      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "sea-hillshade", type: "hillshade", source: "bath-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 1, "hillshade-shadow-color": "#01070c", "hillshade-highlight-color": "#a9c9dd", "hillshade-accent-color": "#0e3247" } as any }, beforeId);
-    }
-    // 陸地色調：用 mapbox-dem(海面平坦)做一層暖色暈渲，只讓陸地變暖灰、海底維持冷灰 → 海陸明顯區隔(仍是黑階)
-    if (!m.getLayer("land-tint-hillshade")) {
-      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "land-tint-hillshade", type: "hillshade", source: "mapbox-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 0.5, "hillshade-shadow-color": "#20242a", "hillshade-highlight-color": "#c9c4b6", "hillshade-accent-color": "#4a4740" } as any }, beforeId);
-    }
-    if (!m.getLayer("sea-contour-lyr")) {
-      // layers=show:1,2,4,5,6,8,9,10 → 涵蓋小/中/大比例尺全部等深線圖層，各縮放級距都有線(淺海本身少線是 GEBCO 間距限制)
-      m.addSource("sea-contour", { type: "raster", tiles: ["https://gis.ngdc.noaa.gov/arcgis/rest/services/wgs84/gebco_2019_contours/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&dpi=96&format=png32&transparent=true&layers=show:1,2,4,5,6,8,9,10&f=image"], tileSize: 512, attribution: "NOAA NCEI · GEBCO 2019 等深線" });
-      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "sea-contour-lyr", type: "raster", source: "sea-contour", layout: { visibility: "none" }, paint: { "raster-opacity": 1, "raster-brightness-min": 0.6, "raster-contrast": 0.2 } }, beforeId);
-    }
-  }
-  // 依底圖切換地形高程來源：等高線(海洋)用含水深的 bath-dem，其餘用 mapbox-dem(陸地精細)
-  function setTerrainSource(mode: string) {
-    const m = mapRef.current; if (!m) return;
-    const src = mode === "topobath" ? "bath-dem" : "mapbox-dem";
-    if (!m.getSource(src)) return;
-    try { m.setTerrain({ source: src, exaggeration: 1.0 }); } catch {}
-  }
   // 魯地圖(臺灣 MOI.OSM，民間戶外/登山地圖，免金鑰圖磚；步道畫得細)
   function ensureRudy() {
     const m = mapRef.current; if (!m || m.getLayer("rudy-lyr")) return;
@@ -473,35 +442,26 @@ export default function App() {
     const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
     m.addLayer({ id: "rudy-lyr", type: "raster", source: "rudy-src", paint: { "raster-opacity": 1 } }, beforeId);
   }
-  function applyBasemap(mode: "dark" | "topo" | "topobath" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy") {
+  function applyBasemap(mode: "dark" | "topo" | "sat" | "gibs" | "vis" | "nphoto" | "nmap" | "rudy") {
     const m = mapRef.current; if (!m) return;
     if (mode === "gibs") ensureGibs();
     if (mode === "vis") ensureVis();
     if (mode === "nphoto") ensureNlsc("nphoto-lyr", "PHOTO2");
     if (mode === "nmap") ensureNlsc("nmap-lyr", "EMAP5_OPENDATA");
     if (mode === "rudy") ensureRudy();
-    if (mode === "topobath") ensureSeaContour();
-    const isTopo = mode === "topo" || mode === "topobath";
     const vis = (id: string, on: boolean) => { if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", on ? "visible" : "none"); };
     vis("sat-layer", mode === "sat");
-    vis("contour-line", isTopo);   // 陸地等高線(兩種等高線模式都顯示)
-    vis("contour-label", isTopo);
-    vis("sea-contour-lyr", mode === "topobath"); // 海洋等深線
-    vis("sea-hillshade", mode === "topobath"); // 海底(含陸地)暈渲，露出海底起伏
-    vis("land-tint-hillshade", mode === "topobath"); // 陸地暖色調，海陸區隔
-    vis("hillshade", mode === "dark" || mode === "topo"); // 一般陸地暈渲(topobath 改用 sea-hillshade)
-    // 等高線(海洋)模式把 Mapbox 深色海水圖層藏起來 →「抽乾海水」露出裸露海底地形，清晰度接近陸地
-    for (const wid of ["water", "water-shadow"]) if (m.getLayer(wid)) m.setLayoutProperty(wid, "visibility", mode === "topobath" ? "none" : "visible");
+    vis("contour-line", mode === "topo");
+    vis("contour-label", mode === "topo");
+    vis("hillshade", mode === "dark" || mode === "topo"); // 有實景/電子地圖的底圖不需陰影
     vis("gibs-sat", mode === "gibs");
     vis("vis-sat", mode === "vis");
     vis("nphoto-lyr", mode === "nphoto");
     vis("nmap-lyr", mode === "nmap");
     vis("rudy-lyr", mode === "rudy");
-    setTerrainSource(mode); // 等高線(海洋)切到含水深地形，其餘用 mapbox-dem
     if (mode === "sat") setGibsInfo("空照　來源：Mapbox Satellite（多期高解析衛星／航照合成影像，非單一拍攝時間；不定期更新）");
     else if (mode === "nphoto") setGibsInfo("正射影像　來源：內政部國土測繪中心 NLSC（台灣航照正射，山區細節較 Mapbox 空照清楚）");
     else if (mode === "nmap") setGibsInfo("電子地圖(含等高線)　來源：內政部國土測繪中心 NLSC 通用版電子地圖 EMAP5");
-    else if (mode === "topobath") setGibsInfo("等高線(海洋)　陸地等高線(Mapbox) + 海洋等深線(NOAA NCEI · GEBCO 2019) + 含水深 3D 地形(AWS terrarium)。海底一樣有起伏，可看出沖繩海槽、大陸棚。");
     else if (mode === "rudy") setGibsInfo("魯地圖(戶外/登山)　來源：魯地圖 Rudy Map · © OpenStreetMap contributors。台灣登山圈常用，步道/山屋/水源標得細；為渲染圖磚，無法點選單一步道。");
     else if (mode !== "gibs" && mode !== "vis") setGibsInfo("");
     if (shadeOn) shadeToTop();
@@ -516,7 +476,7 @@ export default function App() {
     setBasemap(mode);
   }
   function cycleBasemap() {
-    const order = ["dark", "topo", "topobath", "sat", "nphoto", "nmap", "rudy", "gibs", "vis"] as const;
+    const order = ["dark", "topo", "sat", "nphoto", "nmap", "rudy", "gibs", "vis"] as const;
     applyBasemap(order[(order.indexOf(basemap as any) + 1) % order.length]);
   }
   // 山崩與地滑地質敏感區疊圖(經濟部地礦中心「山崩雲」WMTS，注意圖磚順序為 z/x/y)
@@ -2151,7 +2111,7 @@ export default function App() {
       try { const d = await fetch("/resources.json").then((r) => r.json()); setResList(d.resources || []); } catch { /* ignore */ }
     }
   }
-  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", topobath: "等高線(海洋)", sat: "空照", nphoto: "正射(NLSC)", nmap: "電子地圖(NLSC)", rudy: "魯地圖(戶外)", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
+  const BASEMAP_LABEL = { dark: "原始", topo: "等高線", sat: "空照", nphoto: "正射(NLSC)", nmap: "電子地圖(NLSC)", rudy: "魯地圖(戶外)", gibs: "紅外雲圖", vis: "衛星空照圖" } as const;
   function toggle(cat: Cat) { setVisible((p) => { const n = new Set(p); n.has(cat) ? n.delete(cat) : n.add(cat); return n; }); }
   function toggleOpt(o: string) { setChosen((p) => { const n = new Set(p); n.has(o) ? n.delete(o) : n.add(o); return n; }); }
   async function submitReport() {
