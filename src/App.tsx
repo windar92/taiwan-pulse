@@ -151,6 +151,9 @@ export default function App() {
   const [camCounts, setCamCounts] = useState<Record<string, number>>({});
   const [currentsOn, setCurrentsOn] = useState(false);
   const [currentsInfo, setCurrentsInfo] = useState("");
+  const curVecsRef = useRef<any[]>([]);
+  const curMoveRef = useRef<(() => void) | null>(null);
+  const curStepRef = useRef<number>(0);
   const [plaOn, setPlaOn] = useState(false);
   const [plaInfo, setPlaInfo] = useState("");
   const plaPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -1955,35 +1958,65 @@ export default function App() {
     } catch { setCctvInfo("即時影像載入失敗"); }
   }
   // ===== 即時海流(NRT 地轉流，箭頭) =====
+  // 依縮放把箭頭合併到較粗的格網(格內平均 u/v)：拉遠時箭頭變少、不糊成一片。
+  function renderCurrents(force = false) {
+    const m = mapRef.current; if (!m) return;
+    const vecs = curVecsRef.current || [];
+    if (!vecs.length) { setDeckLayers("currents", []); return; }
+    const zoom = m.getZoom();
+    // 資料原生約 0.25°；越遠格距越大(0.25 → 0.5 → 1 → 2 …)
+    const step = Math.max(0.25, 0.25 * Math.pow(2, Math.max(0, Math.round(7 - zoom))));
+    if (!force && step === curStepRef.current) return; // 格距沒變就不重算(平移時省效能)
+    curStepRef.current = step;
+    let arrows: any[];
+    if (step <= 0.25) {
+      arrows = vecs.map((v: any) => ({ pos: [v.lon, v.lat], ang: (Math.atan2(v.v, v.u) * 180) / Math.PI, c: curColor(v.s), sz: 12 + Math.min(v.s, 1.5) * 10 }));
+    } else {
+      const cells = new Map<string, { u: number; v: number; lon: number; lat: number; n: number }>();
+      for (const v of vecs) {
+        const key = Math.round(v.lon / step) + "_" + Math.round(v.lat / step);
+        let c = cells.get(key);
+        if (!c) { c = { u: 0, v: 0, lon: 0, lat: 0, n: 0 }; cells.set(key, c); }
+        c.u += v.u; c.v += v.v; c.lon += v.lon; c.lat += v.lat; c.n++;
+      }
+      arrows = [];
+      for (const c of cells.values()) {
+        const u = c.u / c.n, vv = c.v / c.n, s = Math.hypot(u, vv);
+        if (s < 0.03) continue;
+        arrows.push({ pos: [c.lon / c.n, c.lat / c.n], ang: (Math.atan2(vv, u) * 180) / Math.PI, c: curColor(s), sz: 12 + Math.min(s, 1.5) * 10 });
+      }
+    }
+    setDeckLayers("currents", [
+      new IconLayer({
+        id: "cur-arrows",
+        data: arrows,
+        getPosition: (d: any) => d.pos,
+        getIcon: () => ({ url: ARROW_SVG, width: 160, height: 60, anchorX: 80, anchorY: 30, mask: true }),
+        getAngle: (d: any) => d.ang,
+        getColor: (d: any) => [...d.c, 235],
+        getSize: (d: any) => d.sz,
+        sizeUnits: "pixels", sizeMinPixels: 8, sizeMaxPixels: 34,
+        billboard: true, pickable: false,
+      }),
+    ]);
+  }
   async function toggleCurrents() {
     const m = mapRef.current; if (!m) return;
     const on = !currentsOn;
-    if (!on) { setDeckLayers("currents", []); setCurrentsOn(false); setCurrentsInfo(""); return; }
+    if (!on) {
+      if (curMoveRef.current) { m.off("moveend", curMoveRef.current); curMoveRef.current = null; }
+      curVecsRef.current = []; curStepRef.current = 0;
+      setDeckLayers("currents", []); setCurrentsOn(false); setCurrentsInfo(""); return;
+    }
     setCurrentsOn(true); setCurrentsInfo("海流載入中…");
     try {
       const d = await fetch("/api/live?ds=currents").then((r) => r.json());
       if (!d.ok || !(d.vecs || []).length) { setCurrentsInfo("海流資料暫無"); return; }
-      const arrows = d.vecs.map((v: any) => ({
-        pos: [v.lon, v.lat] as [number, number],
-        ang: (Math.atan2(v.v, v.u) * 180) / Math.PI, // 度，逆時針；圖示原本指東
-        c: curColor(v.s),
-        sz: 12 + Math.min(v.s, 1.5) * 10, // getSize=箭頭高度，寬度依 160:60 比例自動拉長；流速越快越大
-      }));
-      setDeckLayers("currents", [
-        new IconLayer({
-          id: "cur-arrows",
-          data: arrows,
-          getPosition: (d: any) => d.pos,
-          getIcon: () => ({ url: ARROW_SVG, width: 160, height: 60, anchorX: 80, anchorY: 30, mask: true }),
-          getAngle: (d: any) => d.ang,
-          getColor: (d: any) => [...d.c, 235],
-          getSize: (d: any) => d.sz,
-          sizeUnits: "pixels", sizeMinPixels: 8, sizeMaxPixels: 34,
-          billboard: true, pickable: false,
-        }),
-      ]);
+      curVecsRef.current = d.vecs; curStepRef.current = 0;
+      renderCurrents(true);
+      if (!curMoveRef.current) { curMoveRef.current = () => renderCurrents(false); m.on("moveend", curMoveRef.current); }
       setCurrentsOn(true);
-      setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
+      setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速(拉遠自動合併)\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
     } catch { setCurrentsInfo("海流載入失敗"); }
   }
   // ===== 解放軍基地及設施(社群 OSINT + 東海油氣平台) =====
