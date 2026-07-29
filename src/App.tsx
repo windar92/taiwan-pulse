@@ -154,6 +154,7 @@ export default function App() {
   const curVecsRef = useRef<any[]>([]);
   const curMoveRef = useRef<(() => void) | null>(null);
   const curStepRef = useRef<number>(0);
+  const [zoomInfo, setZoomInfo] = useState("");
   const [plaOn, setPlaOn] = useState(false);
   const [plaInfo, setPlaInfo] = useState("");
   const plaPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -233,6 +234,12 @@ export default function App() {
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
     map.addControl(new mapboxgl.ScaleControl({ maxWidth: 130, unit: "metric" }), "bottom-left");
+    const updateZoomInfo = () => {
+      const z = map.getZoom();
+      const step = Math.max(0.25, 0.25 * Math.pow(2, Math.max(0, Math.round(7 - z))));
+      setZoomInfo(`z ${z.toFixed(2)}　海流合併格距 ${step}°（約${Math.round(step * 111)} km）`);
+    };
+    map.on("move", updateZoomInfo); map.on("load", updateZoomInfo);
     hoverRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "hover-tip" });
 
     map.on("style.load", async () => {
@@ -2297,6 +2304,9 @@ export default function App() {
           <span className="qlg-title">流速 m/s</span>
           {[0.15, 0.45, 0.75, 1.05, 1.35].map((s) => (<span key={s} className="qlg-sw" style={{ background: `rgb(${curColor(s).join(",")})` }}>{s.toFixed(1)}</span>))}
         </div>
+      )}
+      {zoomInfo && (
+        <div style={{ position: "absolute", left: 8, bottom: 40, zIndex: 5, background: "rgba(18,20,24,.82)", color: "#e6eaf0", font: "12px/1.4 system-ui,sans-serif", padding: "4px 8px", borderRadius: 6, pointerEvents: "none", whiteSpace: "nowrap" }}>{zoomInfo}</div>
       )}
 
       {quakeOn && quakeList.length > 0 && (
