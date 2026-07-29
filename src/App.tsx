@@ -442,6 +442,11 @@ export default function App() {
     if (!m.getSource("bath-dem")) {
       m.addSource("bath-dem", { type: "raster-dem", tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"], encoding: "terrarium", tileSize: 256, maxzoom: 15, attribution: "AWS Terrain Tiles · GEBCO/SRTM" });
     }
+    // 海底暈渲：用含水深的 bath-dem 做陰影，才看得出海底起伏(mapbox-dem 海面是平的)
+    if (!m.getLayer("sea-hillshade")) {
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "sea-hillshade", type: "hillshade", source: "bath-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 0.6, "hillshade-shadow-color": "#04121e", "hillshade-highlight-color": "#4a6b82", "hillshade-accent-color": "#0a2233" } as any }, beforeId);
+    }
     if (!m.getLayer("sea-contour-lyr")) {
       m.addSource("sea-contour", { type: "raster", tiles: ["https://gis.ngdc.noaa.gov/arcgis/rest/services/wgs84/gebco_2019_contours/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&dpi=96&format=png32&transparent=true&f=image"], tileSize: 512, attribution: "NOAA NCEI · GEBCO 2019 等深線" });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
@@ -476,7 +481,8 @@ export default function App() {
     vis("contour-line", isTopo);   // 陸地等高線(兩種等高線模式都顯示)
     vis("contour-label", isTopo);
     vis("sea-contour-lyr", mode === "topobath"); // 海洋等深線
-    vis("hillshade", mode === "dark" || isTopo); // 有實景/電子地圖的底圖不需陰影
+    vis("sea-hillshade", mode === "topobath"); // 海底(含陸地)暈渲，露出海底起伏
+    vis("hillshade", mode === "dark" || mode === "topo"); // 一般陸地暈渲(topobath 改用 sea-hillshade)
     vis("gibs-sat", mode === "gibs");
     vis("vis-sat", mode === "vis");
     vis("nphoto-lyr", mode === "nphoto");
