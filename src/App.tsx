@@ -445,13 +445,18 @@ export default function App() {
     // 海底暈渲：用含水深的 bath-dem 做陰影，露出「抽乾海水」的裸露海底地形，清晰度接近陸地
     if (!m.getLayer("sea-hillshade")) {
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "sea-hillshade", type: "hillshade", source: "bath-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 0.95, "hillshade-shadow-color": "#02090f", "hillshade-highlight-color": "#9fc0d4", "hillshade-accent-color": "#12384f" } as any }, beforeId);
+      m.addLayer({ id: "sea-hillshade", type: "hillshade", source: "bath-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 1, "hillshade-shadow-color": "#01070c", "hillshade-highlight-color": "#a9c9dd", "hillshade-accent-color": "#0e3247" } as any }, beforeId);
+    }
+    // 陸地色調：用 mapbox-dem(海面平坦)做一層暖色暈渲，只讓陸地變暖灰、海底維持冷灰 → 海陸明顯區隔(仍是黑階)
+    if (!m.getLayer("land-tint-hillshade")) {
+      const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
+      m.addLayer({ id: "land-tint-hillshade", type: "hillshade", source: "mapbox-dem", layout: { visibility: "none" }, paint: { "hillshade-exaggeration": 0.5, "hillshade-shadow-color": "#20242a", "hillshade-highlight-color": "#c9c4b6", "hillshade-accent-color": "#4a4740" } as any }, beforeId);
     }
     if (!m.getLayer("sea-contour-lyr")) {
-      // layers=show:8,9,10 → 直接指定「大比例尺(不受比例尺限制)」的細節等深線，避免多數縮放看不到
-      m.addSource("sea-contour", { type: "raster", tiles: ["https://gis.ngdc.noaa.gov/arcgis/rest/services/wgs84/gebco_2019_contours/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&dpi=96&format=png32&transparent=true&layers=show:8,9,10&f=image"], tileSize: 512, attribution: "NOAA NCEI · GEBCO 2019 等深線" });
+      // layers=show:1,2,4,5,6,8,9,10 → 涵蓋小/中/大比例尺全部等深線圖層，各縮放級距都有線(淺海本身少線是 GEBCO 間距限制)
+      m.addSource("sea-contour", { type: "raster", tiles: ["https://gis.ngdc.noaa.gov/arcgis/rest/services/wgs84/gebco_2019_contours/MapServer/export?bbox={bbox-epsg-3857}&bboxSR=3857&imageSR=3857&size=512,512&dpi=96&format=png32&transparent=true&layers=show:1,2,4,5,6,8,9,10&f=image"], tileSize: 512, attribution: "NOAA NCEI · GEBCO 2019 等深線" });
       const beforeId = m.getLayer("intel-pts") ? "intel-pts" : undefined;
-      m.addLayer({ id: "sea-contour-lyr", type: "raster", source: "sea-contour", layout: { visibility: "none" }, paint: { "raster-opacity": 1, "raster-brightness-min": 0.55, "raster-contrast": 0.15 } }, beforeId);
+      m.addLayer({ id: "sea-contour-lyr", type: "raster", source: "sea-contour", layout: { visibility: "none" }, paint: { "raster-opacity": 1, "raster-brightness-min": 0.6, "raster-contrast": 0.2 } }, beforeId);
     }
   }
   // 依底圖切換地形高程來源：等高線(海洋)用含水深的 bath-dem，其餘用 mapbox-dem(陸地精細)
@@ -483,6 +488,7 @@ export default function App() {
     vis("contour-label", isTopo);
     vis("sea-contour-lyr", mode === "topobath"); // 海洋等深線
     vis("sea-hillshade", mode === "topobath"); // 海底(含陸地)暈渲，露出海底起伏
+    vis("land-tint-hillshade", mode === "topobath"); // 陸地暖色調，海陸區隔
     vis("hillshade", mode === "dark" || mode === "topo"); // 一般陸地暈渲(topobath 改用 sea-hillshade)
     // 等高線(海洋)模式把 Mapbox 深色海水圖層藏起來 →「抽乾海水」露出裸露海底地形，清晰度接近陸地
     for (const wid of ["water", "water-shadow"]) if (m.getLayer(wid)) m.setLayoutProperty(wid, "visibility", mode === "topobath" ? "none" : "visible");
