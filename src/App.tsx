@@ -154,6 +154,7 @@ export default function App() {
   const curVecsRef = useRef<any[]>([]);
   const curMoveRef = useRef<(() => void) | null>(null);
   const curStepRef = useRef<number>(0);
+  const curGridRef = useRef<{ map: Map<string, { u: number; v: number }>; lon0: number; lat0: number; lonMax: number; latMax: number; g: number } | null>(null);
   const [zoomInfo, setZoomInfo] = useState("");
   const [plaOn, setPlaOn] = useState(false);
   const [plaInfo, setPlaInfo] = useState("");
@@ -236,8 +237,8 @@ export default function App() {
     map.addControl(new mapboxgl.ScaleControl({ maxWidth: 130, unit: "metric" }), "bottom-left");
     const updateZoomInfo = () => {
       const z = map.getZoom();
-      const step = Math.max(0.25, 0.25 * Math.pow(2, Math.max(0, Math.round(7 - z))));
-      setZoomInfo(`z ${z.toFixed(2)}　海流合併格距 ${step}°（約${Math.round(step * 111)} km）`);
+      const step = Math.max(0.0625, Math.min(4, 0.25 * Math.pow(2, 6.77 - z)));
+      setZoomInfo(`z ${z.toFixed(2)}　海流取樣格距 ${step.toFixed(2)}°（約${Math.round(step * 111)} km）`);
     };
     map.on("move", updateZoomInfo); map.on("load", updateZoomInfo);
     hoverRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "hover-tip" });
@@ -1966,32 +1967,40 @@ export default function App() {
     } catch { setCctvInfo("即時影像載入失敗"); }
   }
   // ===== 即時海流(NRT 地轉流，箭頭) =====
-  // 依縮放把箭頭合併到較粗的格網(格內平均 u/v)：拉遠時箭頭變少、不糊成一片。
-  function renderCurrents(force = false) {
+  // 從原生 u/v 格網重新取樣：格距隨縮放連續調整，讓「螢幕上的箭頭密度」不論縮放都維持在 z6.77 的樣子。
+  // 只取樣目前視窗範圍(箭頭數量恆定、效能穩)；放大超過原生解析度時用雙線性內插補密。
+  const CUR_ANCHOR_Z = 6.77;
+  function renderCurrents() {
     const m = mapRef.current; if (!m) return;
-    const vecs = curVecsRef.current || [];
-    if (!vecs.length) { setDeckLayers("currents", []); return; }
+    const grid = curGridRef.current;
+    if (!grid || !grid.map.size) { setDeckLayers("currents", []); return; }
+    const { map: gm, lon0, lat0, lonMax, latMax, g } = grid;
     const zoom = m.getZoom();
-    // 資料原生約 0.25°；越遠格距越大(0.25 → 0.5 → 1 → 2 …)
-    const step = Math.max(0.25, 0.25 * Math.pow(2, Math.max(0, Math.round(7 - zoom))));
-    if (!force && step === curStepRef.current) return; // 格距沒變就不重算(平移時省效能)
+    // 螢幕像素密度 ∝ step × 2^zoom；固定在 z6.77 的值 → step = g × 2^(6.77 − zoom)。
+    let step = g * Math.pow(2, CUR_ANCHOR_Z - zoom);
+    step = Math.max(g / 4, Math.min(4, step)); // 夾在 g/4(補密上限) ~ 4°
     curStepRef.current = step;
-    let arrows: any[];
-    if (step <= 0.25) {
-      arrows = vecs.map((v: any) => ({ pos: [v.lon, v.lat], ang: (Math.atan2(v.v, v.u) * 180) / Math.PI, c: curColor(v.s), sz: 12 + Math.min(v.s, 1.5) * 10 }));
-    } else {
-      const cells = new Map<string, { u: number; v: number; lon: number; lat: number; n: number }>();
-      for (const v of vecs) {
-        const key = Math.round(v.lon / step) + "_" + Math.round(v.lat / step);
-        let c = cells.get(key);
-        if (!c) { c = { u: 0, v: 0, lon: 0, lat: 0, n: 0 }; cells.set(key, c); }
-        c.u += v.u; c.v += v.v; c.lon += v.lon; c.lat += v.lat; c.n++;
-      }
-      arrows = [];
-      for (const c of cells.values()) {
-        const u = c.u / c.n, vv = c.v / c.n, s = Math.hypot(u, vv);
-        if (s < 0.03) continue;
-        arrows.push({ pos: [c.lon / c.n, c.lat / c.n], ang: (Math.atan2(vv, u) * 180) / Math.PI, c: curColor(s), sz: 12 + Math.min(s, 1.5) * 10 });
+    // 雙線性內插取樣海流場
+    const sample = (lon: number, lat: number): { u: number; v: number } | null => {
+      const fx = (lon - lon0) / g, fy = (lat - lat0) / g;
+      const i0 = Math.floor(fx), j0 = Math.floor(fy), tx = fx - i0, ty = fy - j0;
+      const c00 = gm.get(i0 + "_" + j0), c10 = gm.get((i0 + 1) + "_" + j0), c01 = gm.get(i0 + "_" + (j0 + 1)), c11 = gm.get((i0 + 1) + "_" + (j0 + 1));
+      if (!c00 || !c10 || !c01 || !c11) { const c = c00 || c10 || c01 || c11; return c ? { u: c.u, v: c.v } : null; }
+      return {
+        u: (c00.u * (1 - tx) + c10.u * tx) * (1 - ty) + (c01.u * (1 - tx) + c11.u * tx) * ty,
+        v: (c00.v * (1 - tx) + c10.v * tx) * (1 - ty) + (c01.v * (1 - tx) + c11.v * tx) * ty,
+      };
+    };
+    const b = m.getBounds(); const pad = step * 2;
+    const w = Math.max(lon0, b.getWest() - pad), e = Math.min(lonMax, b.getEast() + pad);
+    const s = Math.max(lat0, b.getSouth() - pad), n = Math.min(latMax, b.getNorth() + pad);
+    const arrows: any[] = [];
+    for (let lat = Math.ceil(s / step) * step; lat <= n; lat += step) {
+      for (let lon = Math.ceil(w / step) * step; lon <= e; lon += step) {
+        const r = sample(lon, lat); if (!r) continue;
+        const spd = Math.hypot(r.u, r.v); if (spd < 0.03) continue;
+        arrows.push({ pos: [lon, lat], ang: (Math.atan2(r.v, r.u) * 180) / Math.PI, c: curColor(spd), sz: 12 + Math.min(spd, 1.5) * 10 });
+        if (arrows.length > 4000) break; // 保險上限
       }
     }
     setDeckLayers("currents", [
@@ -2005,6 +2014,7 @@ export default function App() {
         getSize: (d: any) => d.sz,
         sizeUnits: "pixels", sizeMinPixels: 8, sizeMaxPixels: 34,
         billboard: true, pickable: false,
+        parameters: { depthTest: false }, // 正俯視(pitch 0)也不被地形深度吃掉
       }),
     ]);
   }
@@ -2013,18 +2023,27 @@ export default function App() {
     const on = !currentsOn;
     if (!on) {
       if (curMoveRef.current) { m.off("moveend", curMoveRef.current); curMoveRef.current = null; }
-      curVecsRef.current = []; curStepRef.current = 0;
+      curVecsRef.current = []; curGridRef.current = null; curStepRef.current = 0;
       setDeckLayers("currents", []); setCurrentsOn(false); setCurrentsInfo(""); return;
     }
     setCurrentsOn(true); setCurrentsInfo("海流載入中…");
     try {
       const d = await fetch("/api/live?ds=currents").then((r) => r.json());
       if (!d.ok || !(d.vecs || []).length) { setCurrentsInfo("海流資料暫無"); return; }
-      curVecsRef.current = d.vecs; curStepRef.current = 0;
-      renderCurrents(true);
-      if (!curMoveRef.current) { curMoveRef.current = () => renderCurrents(false); m.on("moveend", curMoveRef.current); }
+      curVecsRef.current = d.vecs;
+      // 建立原生格網索引：偵測格距 g、原點、範圍
+      let lon0 = Infinity, lat0 = Infinity, lonMax = -Infinity, latMax = -Infinity;
+      const lonsSet = new Set<number>();
+      for (const v of d.vecs) { lon0 = Math.min(lon0, v.lon); lat0 = Math.min(lat0, v.lat); lonMax = Math.max(lonMax, v.lon); latMax = Math.max(latMax, v.lat); lonsSet.add(v.lon); }
+      const lons = [...lonsSet].sort((a, b) => a - b);
+      let g = 0.25; for (let i = 1; i < lons.length; i++) { const dd = lons[i] - lons[i - 1]; if (dd > 0.001) { g = Math.min(g, dd); } }
+      const gmap = new Map<string, { u: number; v: number }>();
+      for (const v of d.vecs) { gmap.set(Math.round((v.lon - lon0) / g) + "_" + Math.round((v.lat - lat0) / g), { u: v.u, v: v.v }); }
+      curGridRef.current = { map: gmap, lon0, lat0, lonMax, latMax, g };
+      renderCurrents();
+      if (!curMoveRef.current) { curMoveRef.current = () => renderCurrents(); m.on("moveend", curMoveRef.current); }
       setCurrentsOn(true);
-      setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速(拉遠自動合併)\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
+      setCurrentsInfo(`即時海流 ${d.date || ""}　箭頭方向=流向、顏色=流速(密度隨縮放固定)\n來源：NRT 地轉流 · NOAA AOML CoastWatch`);
     } catch { setCurrentsInfo("海流載入失敗"); }
   }
   // ===== 解放軍基地及設施(社群 OSINT + 東海油氣平台) =====
