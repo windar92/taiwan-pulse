@@ -572,8 +572,8 @@ export default function App() {
   // 海流箭頭圖示：一根「白色實心錐形箭頭」(指向 +x/東)，用 mask 讓 getColor 依流速上色。
   // 比細線好看很多：邊緣平滑、比例一致、放大不糊。
   const ARROW_SVG = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'>
-      <path d='M6 44 L58 44 L58 28 L96 50 L58 72 L58 56 L6 56 Z' fill='#fff'/>
+    `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='60' viewBox='0 0 160 60'>
+      <path d='M4 24 L112 24 L112 8 L156 30 L112 52 L112 36 L4 36 Z' fill='#fff'/>
     </svg>`.replace(/\s+/g, " ")
   );
   function renderTreeCones(exag: number) {
@@ -1967,18 +1967,18 @@ export default function App() {
         pos: [v.lon, v.lat] as [number, number],
         ang: (Math.atan2(v.v, v.u) * 180) / Math.PI, // 度，逆時針；圖示原本指東
         c: curColor(v.s),
-        sz: 15 + Math.min(v.s, 1.5) * 15, // 流速越快箭頭越大，黑潮更醒目
+        sz: 12 + Math.min(v.s, 1.5) * 10, // getSize=箭頭高度，寬度依 160:60 比例自動拉長；流速越快越大
       }));
       setDeckLayers("currents", [
         new IconLayer({
           id: "cur-arrows",
           data: arrows,
           getPosition: (d: any) => d.pos,
-          getIcon: () => ({ url: ARROW_SVG, width: 100, height: 100, anchorX: 50, anchorY: 50, mask: true }),
+          getIcon: () => ({ url: ARROW_SVG, width: 160, height: 60, anchorX: 80, anchorY: 30, mask: true }),
           getAngle: (d: any) => d.ang,
           getColor: (d: any) => [...d.c, 235],
           getSize: (d: any) => d.sz,
-          sizeUnits: "pixels", sizeMinPixels: 9, sizeMaxPixels: 46,
+          sizeUnits: "pixels", sizeMinPixels: 8, sizeMaxPixels: 34,
           billboard: true, pickable: false,
         }),
       ]);
