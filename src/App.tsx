@@ -572,7 +572,7 @@ export default function App() {
   // 海流箭頭圖示：一根「白色實心錐形箭頭」(指向 +x/東)，用 mask 讓 getColor 依流速上色。
   // 比細線好看很多：邊緣平滑、比例一致、放大不糊。
   const ARROW_SVG = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
-    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'>
+    `<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'>
       <path d='M6 44 L58 44 L58 28 L96 50 L58 72 L58 56 L6 56 Z' fill='#fff'/>
     </svg>`.replace(/\s+/g, " ")
   );
