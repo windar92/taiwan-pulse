@@ -232,6 +232,7 @@ export default function App() {
     });
     mapRef.current = map;
     map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), "top-right");
+    map.addControl(new mapboxgl.ScaleControl({ maxWidth: 130, unit: "metric" }), "bottom-left");
     hoverRef.current = new mapboxgl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: "hover-tip" });
 
     map.on("style.load", async () => {
