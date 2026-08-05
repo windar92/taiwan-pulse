@@ -1,0 +1,115 @@
+{
+  "ok": true,
+  "source": "國防部 每日「中共解放軍臺海周邊海、空域動態」(政治作戰局) · 靜態備援快照",
+  "note": "線上 /api/live?ds=pladaily 會即時抓取最新",
+  "days": [
+    {
+      "date": "2026-08-04",
+      "sorties": 21,
+      "entered": 17,
+      "crossed": true,
+      "zones": [
+        "北部",
+        "中部",
+        "西南"
+      ],
+      "ships": 9,
+      "coastguard": 5
+    },
+    {
+      "date": "2026-08-03",
+      "sorties": 6,
+      "entered": 6,
+      "crossed": false,
+      "zones": [
+        "西南",
+        "東部"
+      ],
+      "ships": 7,
+      "coastguard": 6
+    },
+    {
+      "date": "2026-08-02",
+      "sorties": 1,
+      "entered": 1,
+      "crossed": false,
+      "zones": [
+        "西南"
+      ],
+      "ships": 7,
+      "coastguard": 3
+    },
+    {
+      "date": "2026-08-01",
+      "sorties": 5,
+      "entered": 3,
+      "crossed": true,
+      "zones": [
+        "西南"
+      ],
+      "ships": 8,
+      "coastguard": 2
+    },
+    {
+      "date": "2026-07-31",
+      "sorties": 5,
+      "entered": 5,
+      "crossed": false,
+      "zones": [
+        "西南",
+        "東部"
+      ],
+      "ships": 10,
+      "coastguard": 2
+    },
+    {
+      "date": "2026-07-30",
+      "sorties": 27,
+      "entered": 22,
+      "crossed": true,
+      "zones": [
+        "北部",
+        "中部",
+        "西南",
+        "東部"
+      ],
+      "ships": 9,
+      "coastguard": 2
+    },
+    {
+      "date": "2026-07-29",
+      "sorties": 12,
+      "entered": 10,
+      "crossed": true,
+      "zones": [
+        "西南",
+        "東部"
+      ],
+      "ships": 7,
+      "coastguard": 1
+    },
+    {
+      "date": "2026-07-28",
+      "sorties": 8,
+      "entered": 6,
+      "crossed": true,
+      "zones": [
+        "北部",
+        "東部"
+      ],
+      "ships": 7,
+      "coastguard": 1
+    },
+    {
+      "date": "2026-07-27",
+      "sorties": 1,
+      "entered": 1,
+      "crossed": false,
+      "zones": [
+        "西南"
+      ],
+      "ships": 7,
+      "coastguard": 0
+    }
+  ]
+}
