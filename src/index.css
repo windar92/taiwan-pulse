@@ -500,7 +500,7 @@ body,
 .coast-btn.on { background: #1b8a6b; color: #fff; }
 .coast-btn:hover { filter: brightness(1.06); }
 
-.cctv-btn, .currents-btn, .pla-btn, .basin-btn, .res-btn, .landslide-btn, .shade-btn, .slope-btn, .tree-btn, .wf-btn, .hs-btn {
+.cctv-btn, .currents-btn, .pla-btn, .basin-btn, .res-btn, .landslide-btn, .shade-btn, .slope-btn, .tree-btn, .wf-btn, .hs-btn, .cable-btn, .pd-btn {
   border: none; border-radius: 5px; background: #fff; color: #222;
   font-size: 12px; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35); cursor: pointer;
 }
@@ -514,6 +514,8 @@ body,
 .currents-btn.on { background: #0277bd; color: #fff; }
 .pla-btn.on { background: #6a1b9a; color: #fff; }
 .basin-btn.on { background: #1565c0; color: #fff; }
+.cable-btn.on { background: #00838f; color: #fff; }
+.pd-btn.on { background: #b71c1c; color: #fff; }
 .cctv-btn:hover, .currents-btn:hover, .pla-btn:hover, .basin-btn:hover { filter: brightness(1.08); }
 .gz-info {
   position: absolute;
