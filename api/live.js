@@ -398,7 +398,7 @@ async function cable() {
 // ---- \u570b\u9632\u90e8\u6bcf\u65e5\u300c\u4e2d\u5171\u89e3\u653e\u8ecd\u81fa\u6d77\u5468\u908a\u6d77\u3001\u7a7a\u57df\u52d5\u614b\u300d----
 function parsePlaReport(t) {
   const zoneKeys = ["\u897f\u5357", "\u5317\u90e8", "\u4e2d\u90e8", "\u6771\u90e8", "\u6771\u5317"];
-  const s = (t.match(/\u5075\u7378[^\u3002]*\u3002/) || [""])[0];
+  const s = (t.match(/\u5075\u7372[^\u3002]*\u3002/) || [""])[0];
   const sor = (s.match(/\u5171\u6a5f(\d+)\u67b6/) || [])[1];
   const par = (s.match(/\uff08([^\uff09]*)\uff09/) || [])[1] || "";
   const ent = (par.match(/(\d+)\u67b6/) || [])[1];
