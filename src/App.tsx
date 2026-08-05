@@ -82,6 +82,8 @@ export default function App() {
   const treeExagRef = useRef(2);
   const [wfOn, setWfOn] = useState(false); const [wfInfo, setWfInfo] = useState(""); const wfPopRef = useRef<mapboxgl.Popup | null>(null);
   const [hsOn, setHsOn] = useState(false); const [hsInfo, setHsInfo] = useState(""); const hsPopRef = useRef<mapboxgl.Popup | null>(null);
+  const [cableOn, setCableOn] = useState(false); const [cableInfo, setCableInfo] = useState(""); const cablePopRef = useRef<mapboxgl.Popup | null>(null);
+  const [pdOn, setPdOn] = useState(false); const [pdInfo, setPdInfo] = useState(""); const pdPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
   const countyGeoRef = useRef<any>(null);
@@ -571,6 +573,82 @@ export default function App() {
       cfg.setInfo(`${cfg.label} ${d.points.length} 處　來源：${cfg.src}（業餘整理·僅供參考，非官方導覽座標）`);
     } catch { cfg.setInfo(cfg.label + "載入失敗"); }
   }
+  // ===== 海纜事件(斷纜/維護)：smc.peering.tw 公開資料 =====
+  const CABLE_STATUS: Record<string, { c: string; t: string }> = { disconnected: { c: "#e53935", t: "斷線" }, partial_disconnected: { c: "#fbc02d", t: "部分斷線" }, notice: { c: "#42a5f5", t: "維護/公告" } };
+  const CABLE_REASON: Record<string, string> = { earthquake: "地震", fishing: "漁業作業", sabotage: "蓄意破壞", maintenance: "計畫性維護", equipment: "設備障礙", land: "陸上作業", unknown: "未知" };
+  async function toggleCable() {
+    const m = mapRef.current; if (!m) return;
+    const on = !cableOn;
+    if (!on) { if (m.getLayer("cable-pt")) m.setLayoutProperty("cable-pt", "visibility", "none"); cablePopRef.current?.remove(); setCableOn(false); setCableInfo(""); return; }
+    setCableOn(true); setCableInfo("海纜事件載入中…");
+    try {
+      const d = await fetch("/api/live?ds=cable").then((r) => r.json());
+      const inc = (d.incidents || []).filter((x: any) => Number.isFinite(x.lon) && Number.isFinite(x.lat));
+      if (!inc.length) { setCableInfo("海纜事件暫無可定位資料"); return; }
+      const fc = { type: "FeatureCollection", features: inc.map((x: any) => ({ type: "Feature", geometry: { type: "Point", coordinates: [x.lon, x.lat] }, properties: { ...x, c: CABLE_STATUS[x.status]?.c || "#90a4ae" } })) } as any;
+      if (m.getSource("cable-src")) (m.getSource("cable-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("cable-src", { type: "geojson", data: fc });
+        m.addLayer({ id: "cable-pt", type: "circle", source: "cable-src", paint: { "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 4, 11, 8], "circle-color": ["get", "c"], "circle-stroke-width": 1.5, "circle-stroke-color": "#0a1a24", "circle-opacity": 0.9 } });
+        m.on("mouseenter", "cable-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "cable-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "cable-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          const st = CABLE_STATUS[p.status] || { t: p.status, c: "#90a4ae" };
+          const rs = CABLE_REASON[p.reason] || p.reason || "未知";
+          const dd = (p.date || "").slice(0, 10);
+          const etr = p.resolved_at ? ("已修復 " + String(p.resolved_at).slice(0, 10)) : (p.reparing_at ? ("預計修復 " + String(p.reparing_at).slice(0, 10)) : "處理中");
+          cablePopRef.current?.remove();
+          cablePopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "300px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b><span style="color:${st.c}">●</span> ${p.title || ""}</b><br/><span style="opacity:.85">${dd}・${st.t}・肇因：${rs}</span><br/><span style="opacity:.8;font-size:12px">${(p.description || "").slice(0, 140)}</span><br/><span style="opacity:.6;font-size:11px">${etr}・海纜:${p.cableid || ""}</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("cable-pt", "visibility", "visible");
+      setCableOn(true);
+      setCableInfo(`海纜事件 ${inc.length} 起可定位（共 ${d.count} 起/近2年${d.active ? "・發生中 " + d.active : ""}）　紅=斷線 黃=部分 藍=維護\n來源：${d.source || "smc.peering.tw"}`);
+    } catch { setCableInfo("海纜事件載入失敗"); }
+  }
+  // ===== 共軍每日動態(國防部) =====
+  const PLA_ZONE: Record<string, [number, number, string]> = {
+    "西南": [119.0, 21.9, "西南空域"], "北部": [122.3, 26.2, "北部空域"],
+    "中部": [119.3, 24.2, "中部空域"], "東部": [123.3, 23.4, "東部空域"], "東北": [123.2, 26.2, "東北空域"],
+  };
+  async function togglePlaDaily() {
+    const m = mapRef.current; if (!m) return;
+    const on = !pdOn;
+    if (!on) { if (m.getLayer("pd-pt")) m.setLayoutProperty("pd-pt", "visibility", "none"); pdPopRef.current?.remove(); setPdOn(false); setPdInfo(""); return; }
+    setPdOn(true); setPdInfo("共軍每日動態載入中…");
+    try {
+      let d: any = await fetch("/api/live?ds=pladaily").then((r) => r.json()).catch(() => null);
+      if (!d || !d.ok || !(d.days || []).length) d = await fetch("/pla-daily.json").then((r) => r.json());
+      const days: any[] = (d.days || []).slice().sort((a: any, b: any) => (b.date || "").localeCompare(a.date || ""));
+      if (!days.length) { setPdInfo("共軍每日動態暫無資料"); return; }
+      const agg: Record<string, { total: number; cnt: number }> = {};
+      for (const day of days) for (const z of (day.zones || [])) { if (!PLA_ZONE[z]) continue; const a = agg[z] || (agg[z] = { total: 0, cnt: 0 }); a.total += day.sorties || 0; a.cnt++; }
+      const feats = Object.keys(agg).map((z) => ({ type: "Feature", geometry: { type: "Point", coordinates: [PLA_ZONE[z][0], PLA_ZONE[z][1]] }, properties: { zone: PLA_ZONE[z][2], total: agg[z].total, cnt: agg[z].cnt } }));
+      const fc = { type: "FeatureCollection", features: feats } as any;
+      if (m.getSource("pd-src")) (m.getSource("pd-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("pd-src", { type: "geojson", data: fc });
+        m.addLayer({ id: "pd-pt", type: "circle", source: "pd-src", paint: { "circle-radius": ["interpolate", ["linear"], ["get", "total"], 1, 8, 20, 18, 60, 30], "circle-color": ["interpolate", ["linear"], ["get", "total"], 1, "#ffca28", 15, "#fb8c00", 40, "#e53935"], "circle-opacity": 0.5, "circle-stroke-width": 1.5, "circle-stroke-color": "#e53935" } });
+        m.on("mouseenter", "pd-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "pd-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "pd-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          pdPopRef.current?.remove();
+          pdPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "260px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b>${p.zone}</b><br/>近 ${days.length} 日：共 <b>${p.total}</b> 架次進入・${p.cnt} 天有活動<br/><span style="opacity:.6;font-size:11px">來源：國防部每日空情</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("pd-pt", "visibility", "visible");
+      setPdOn(true);
+      const t = days[0];
+      const zoneTxt = (t.zones || []).map((z: string) => PLA_ZONE[z]?.[2] || z).join("、");
+      setPdInfo(`共軍動態 ${t.date}：共機 ${t.sorties} 架次${t.crossed ? "(逾越中線 " + t.entered + ")" : "(進入 " + t.entered + ")"}、共艦 ${t.ships}、公務船 ${t.coastguard}\n空域：${zoneTxt || "無"}　圓圈=近${days.length}日各空域累計架次\n來源：國防部每日戰報`);
+    } catch { setPdInfo("共軍每日動態載入失敗"); }
+  }
   // 立體樹：用 deck.gl IconLayer 貼一張「針葉樹」SVG 圖案，billboard(永遠面向鏡頭)、以公尺為單位
   // 依真實樹高縮放，底部釘在該點 DEM 海拔 → 樹站在地面上、隨地形前後遮擋。最簡單又最像樹的做法。
   const TREE_SVG = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
@@ -933,7 +1011,7 @@ export default function App() {
     w(rainOn, toggleRain); w(quakeOn, toggleQuake); w(tempOn, toggleTemp); w(staOn, toggleSta);
     w(typhoonOn, toggleTyphoon); w(oceanOn, toggleOcean); w(shipsOn, toggleShips);
     w(peaksOn, togglePeaks); w(lakeOn, toggleLake); w(gzOn, toggleGrayZone);
-    w(cctvOn, toggleCctv); w(currentsOn, toggleCurrents); w(plaOn, togglePla);
+    w(cctvOn, toggleCctv); w(currentsOn, toggleCurrents); w(plaOn, togglePla); w(cableOn, toggleCable); w(pdOn, togglePlaDaily);
     if (on && riverModeRef.current === 0) cycleRiver();
     if (!on && riverModeRef.current > 0) { if (wallOn) toggleWaterWall(); if (riversOn) toggleRivers(); riverModeRef.current = 0; setRiverMode(0); }
   }
@@ -2168,6 +2246,8 @@ export default function App() {
         <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="即時影像：國道(高公局)橘、省道(公路局)黃、河川(水利署)藍、路口淹水紫。點擊看即時畫面">即時影像</button>
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
+        <button className={"cable-btn" + (cableOn ? " on" : "")} onClick={toggleCable} title="海纜事件(斷纜/維護)：資料 smc.peering.tw，原始來源含數位發展部/中華電信。紅=斷線、黃=部分、藍=維護">🔌 海纜事件</button>
+        <button className={"pd-btn" + (pdOn ? " on" : "")} onClick={togglePlaDaily} title="共軍每日動態：國防部每日「中共解放軍臺海周邊海、空域動態」，將近14日各空域累計架次標在代表位置">📋 共軍動態</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
         <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
         <button className={"shade-btn" + (shadeOn ? " on" : "")} onClick={toggleShade} title="光達地形暈渲(20m 多向陰影)：半透明疊在底圖上，強化稜線/溪谷立體感">🗻 地形暈渲</button>
@@ -2193,6 +2273,8 @@ export default function App() {
         {cctvInfo && <div className="li">{cctvInfo}</div>}
         {currentsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{currentsInfo}</div>}
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
+        {cableInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{cableInfo}</div>}
+        {pdInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{pdInfo}</div>}
         {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
         {treesInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{treesInfo}</div>}
         {wfInfo && <div className="li">{wfInfo}</div>}
