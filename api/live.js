@@ -359,6 +359,74 @@ async function pla(req) {
   };
 }
 
+// ---- 海纜事件(台灣海纜動態地圖 smc.peering.tw 公開試算表；原始來源含數位發展部/中華電信公告) ----
+async function cable() {
+  const url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR4ufKCDRwgDT24QpIzJYAK8O5kF2jffqwpc6EdbRV2YZ4oHAXuX3SbWxpJTg7fdMLVWBbSKt9M57XR/pub?gid=0&single=true&output=tsv";
+  const r = await fetch(url, { headers: UA });
+  if (!r.ok) throw new Error("Sheet " + r.status);
+  const text = await r.text();
+  const lines = text.split(/\r?\n/).filter((l) => l.length);
+  if (!lines.length) return { ok: true, count: 0, incidents: [] };
+  const cols = lines[0].split("\t").map((c) => c.trim());
+  const ix = (n) => cols.indexOf(n);
+  const iDate = ix("date"), iStatus = ix("status"), iReason = ix("reason"), iCable = ix("cableid"), iSeg = ix("segment"), iTitle = ix("title"), iDesc = ix("description"), iRep = ix("reparing_at"), iRes = ix("resolved_at");
+  const parseDMS = (s) => {
+    const la = s.match(/(\d+)\s*\u00b0\s*([\d.]+)\s*\u0027?\s*([NS])/);
+    const lo = s.match(/(\d+)\s*\u00b0\s*([\d.]+)\s*\u0027?\s*([EW])/);
+    if (!la || !lo) return null;
+    let lat = (+la[1]) + (+la[2]) / 60; if (la[3] === "S") lat = -lat;
+    let lon = (+lo[1]) + (+lo[2]) / 60; if (lo[3] === "W") lon = -lon;
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+    return [+lon.toFixed(5), +lat.toFixed(5)];
+  };
+  const cutoff = Date.now() - 365 * 24 * 3600 * 1000 * 2;
+  const incidents = [];
+  for (let i = 1; i < lines.length; i++) {
+    const c = lines[i].split("\t");
+    const date = (c[iDate] || "").trim(); if (!date) continue;
+    const t = Date.parse(date), resAt = (c[iRes] || "").trim(), tRes = resAt ? Date.parse(resAt) : NaN;
+    if (Number.isFinite(t) && t < cutoff && (!Number.isFinite(tRes) || tRes < cutoff)) continue;
+    const description = (c[iDesc] || "").replace(/^"|"$/g, "").trim();
+    const pos = parseDMS(description);
+    incidents.push({ date, status: (c[iStatus] || "").trim(), reason: (c[iReason] || "").trim(), cableid: (c[iCable] || "").trim(), segment: (c[iSeg] || "").trim(), title: (c[iTitle] || "").trim(), description, reparing_at: (c[iRep] || "").trim(), resolved_at: resAt, lon: pos ? pos[0] : null, lat: pos ? pos[1] : null });
+  }
+  incidents.sort((a, b) => (Date.parse(b.date) || 0) - (Date.parse(a.date) || 0));
+  const active = incidents.filter((x) => !x.resolved_at).length;
+  return { ok: true, count: incidents.length, active, source: "\u53f0\u7063\u6d77\u7e9c\u52d5\u614b\u5730\u5716 smc.peering.tw (MIT)\u00b7\u539f\u59cb\u4f86\u6e90\u542b\u6578\u4f4d\u767c\u5c55\u90e8\uff0f\u4e2d\u83ef\u96fb\u4fe1\u516c\u544a", incidents };
+}
+
+// ---- \u570b\u9632\u90e8\u6bcf\u65e5\u300c\u4e2d\u5171\u89e3\u653e\u8ecd\u81fa\u6d77\u5468\u908a\u6d77\u3001\u7a7a\u57df\u52d5\u614b\u300d----
+function parsePlaReport(t) {
+  const zoneKeys = ["\u897f\u5357", "\u5317\u90e8", "\u4e2d\u90e8", "\u6771\u90e8", "\u6771\u5317"];
+  const s = (t.match(/\u5075\u7378[^\u3002]*\u3002/) || [""])[0];
+  const sor = (s.match(/\u5171\u6a5f(\d+)\u67b6/) || [])[1];
+  const par = (s.match(/\uff08([^\uff09]*)\uff09/) || [])[1] || "";
+  const ent = (par.match(/(\d+)\u67b6/) || [])[1];
+  const zones = zoneKeys.filter((z) => par.includes(z));
+  const ships = (s.match(/\u5171\u8266(\d+)\u8258/) || [])[1];
+  const cg = (s.match(/\u516c\u52d9\u8239(\d+)\u8258/) || [])[1];
+  const dm = t.match(/\u4e2d\u83ef\u6c11\u570b(\d+)\u5e74(\d+)\u6708(\d+)\u65e5/g);
+  let date = "";
+  if (dm) { const mm = dm[dm.length - 1].match(/(\d+)\u5e74(\d+)\u6708(\d+)\u65e5/); date = (+mm[1] + 1911) + "-" + String(mm[2]).padStart(2, "0") + "-" + String(mm[3]).padStart(2, "0"); }
+  return { date, sorties: sor ? +sor : 0, entered: ent ? +ent : 0, crossed: /\u903e\u8d8a\u4e2d\u7dda/.test(par), zones, ships: ships ? +ships : 0, coastguard: cg ? +cg : 0 };
+}
+async function pladaily() {
+  const BUA = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36", "Accept-Language": "zh-TW" };
+  const listHtml = await fetch("https://www.mnd.gov.tw/news/plaactlist", { headers: BUA }).then((r) => r.text());
+  const ids = [...new Set((listHtml.match(/plaact\/(\d+)/g) || []).map((s) => s.split("/")[1]))].slice(0, 14);
+  if (!ids.length) return { ok: false, error: "no list", days: [] };
+  const days = [];
+  await Promise.all(ids.map(async (id) => {
+    try {
+      const h = await fetch("https://www.mnd.gov.tw/news/plaact/" + id, { headers: BUA }).then((r) => r.text());
+      const body = (h.match(/<main[\s\S]*?<\/main>/i) || [h])[0].replace(/<[^>]+>/g, " ");
+      const d = parsePlaReport(body);
+      if (d.date) days.push({ id, ...d });
+    } catch {}
+  }));
+  days.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  return { ok: true, count: days.length, source: "\u570b\u9632\u90e8 \u6bcf\u65e5\u300c\u4e2d\u5171\u89e3\u653e\u8ecd\u81fa\u6d77\u5468\u908a\u6d77\u3001\u7a7a\u57df\u52d5\u614b\u300d(\u653f\u6cbb\u4f5c\u6230\u5c40)", days };
+}
 export default async function handler(req, res) {
   const url = new URL(req.url, "http://x");
   const ds = url.searchParams.get("ds") || "";
@@ -377,6 +445,8 @@ export default async function handler(req, res) {
       case "cctv": return send(res, 200, await cctv(), "s-maxage=1800, stale-while-revalidate=3600");
       case "currents": return send(res, 200, await currents(), "s-maxage=10800, stale-while-revalidate=43200");
       case "pla": return send(res, 200, await pla(req), "s-maxage=86400, stale-while-revalidate=604800");
+      case "cable": return send(res, 200, await cable(), "s-maxage=1800, stale-while-revalidate=3600");
+      case "pladaily": return send(res, 200, await pladaily(), "s-maxage=3600, stale-while-revalidate=21600");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
