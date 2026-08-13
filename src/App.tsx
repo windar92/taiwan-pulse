@@ -47,6 +47,40 @@ const COLOR: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, 
 const LABEL: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.label]));
 const REPORT_OPTIONS = ["地點錯誤（釘錯位置）", "分類錯誤", "與主題無關（不該顯示）", "內容或標題有誤", "重複內容", "已過期或失效", "連結打不開", "其他"];
 
+// ===== 重要度計分：把「死了人/斷纜/共機」和「中秋禮盒/桌球友誼賽」分開 =====
+const SEV_RULES: [RegExp, number][] = [
+  [/死亡|罹難|不治|喪生|身亡|死者/, 42],
+  [/爆炸|氣爆|大火|延燒|坍塌|倒塌|墜機|墜樓|翻覆/, 32],
+  [/共機|共艦|共軍|解放軍|逾越中線|擾台|海警船|軍演|漢光|實彈/, 32],
+  [/斷纜|海纜|光纜中斷|通訊中斷/, 30],
+  [/颱風|海上警報|陸上警報|停班|停課|撤離|疏散/, 30],
+  [/地震|規模\s?[3-9]|震度\s?[4-7]/, 26],
+  [/重傷|傷亡|失蹤|受困|搜救/, 26],
+  [/槍擊|砍人|命案|挾持|綁架|爆裂物|恐嚇/, 24],
+  [/土石流|走山|山崩|堰塞湖|潰堤|溢流警戒/, 24],
+  [/封路|道路中斷|封閉|禁航|管制/, 18],
+  [/大規模停電|全區停電|跳電/, 18],
+  [/疫情|群聚感染|食物中毒|禽流感|非洲豬瘟/, 16],
+  [/起訴|判刑|收押|逮捕|查獲|偵辦/, 12],
+];
+const FLUFF_RE = /禮盒|嘉年華|市集|園遊會|表揚|揭牌|授旗|研習|夏令營|營隊|親子|摸彩|抽獎|成果展|文化節|美食節|打卡|網美|優惠|好禮|同樂|開箱|徵集|報名|講座|論壇|頒獎|感謝|友誼賽|才藝|寫生|繪畫|歌唱|舞蹈|志工|生活節|解壓|閱讀禮|午餐|廚藝|伴手禮|送禮|中秋|端午|春節|年菜|義賣|捐贈|開幕|揭幕|巡迴|宣導|推廣|樂齡|銀髮|優先採購|記者會|展售|特展/;
+const ROUTINE_RE = /水庫放流|自由溢流|已無警戒|停水通知|管線漏水|破管搶修|汰換管線|新裝工程|計畫性維護|例行/;
+// 來源層級：公共媒體 > 深度媒體 > 官方警示 > 商業媒體 > 地方公關稿
+function srcTier(s: string) {
+  if (/中央社|公視/.test(s)) return 3;
+  if (/報導者|鏡新聞/.test(s)) return 2.5;
+  if (/氣象署|NCDR|海巡|水保署|國防部|移民署|漁業署/.test(s)) return 2;
+  if (/自由時報|聯合報|三立|民視|ETtoday|新頭殼|風傳媒|TVBS/.test(s)) return 1.5;
+  return 1;
+}
+function sevScore(t: string) {
+  let max = 0, sum = 0;
+  for (const [re, w] of SEV_RULES) if (re.test(t)) { max = Math.max(max, w); sum += w; }
+  return max + (sum - max) * 0.25;
+}
+function normTitle(t: string) {
+  return (t || "").replace(/[【】〔〕()（）\[\]「」『』:：,，、。!！?？~～\-—\s]/g, "").replace(/\d{2,}/g, "").slice(0, 14);
+}
 function loadHome() {
   try { const v = JSON.parse(localStorage.getItem(HOME_KEY) || "null"); if (v && typeof v.lng === "number") return v; } catch {}
   return DEFAULT_HOME;
@@ -66,6 +100,8 @@ export default function App() {
   const [showMemo, setShowMemo] = useState(false);
   const [menuOpen, setMenuOpen] = useState(true);
   const [newsOpen, setNewsOpen] = useState(false);
+  const [focus, setFocus] = useState<any[]>([]);
+  const [focusOpen, setFocusOpen] = useState(false);
   const [resOpen, setResOpen] = useState(false);
   const [resList, setResList] = useState<any[]>([]);
   const [allLayersOn, setAllLayersOn] = useState(false);
@@ -374,7 +410,7 @@ export default function App() {
     if (evRes?.ok) for (const e of evRes.events || []) {
       if (typeof e.lng !== "number") continue;
       const cat = primary(e.categories);
-      features.push({ type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] }, properties: { cat, cats: e.categories, hash: e.hash, title: e.title, summary: e.summary, source: e.source_name, url: e.url, county: e.county } });
+      features.push({ type: "Feature", geometry: { type: "Point", coordinates: [e.lng, e.lat] }, properties: { cat, cats: e.categories, hash: e.hash, title: e.title, summary: e.summary, source: e.source_name, url: e.url, county: e.county, published_at: e.published_at || "" } });
       tally[cat] = (tally[cat] || 0) + 1;
     }
     if (rpRes?.ok) for (const r of rpRes.reports || []) {
@@ -382,10 +418,39 @@ export default function App() {
       features.push({ type: "Feature", geometry: { type: "Point", coordinates: [r.lng, r.lat] }, properties: { cat: "report", cats: "report", hash: "", title: r.title, summary: r.body, source: r.kind, url: "", county: "" } });
       tally.report = (tally.report || 0) + 1;
     }
+    buildFocus(evRes?.ok ? (evRes.events || []) : []);
     (map.getSource("intel") as mapboxgl.GeoJSONSource)?.setData({ type: "FeatureCollection", features } as any);
     setCounts(tally);
   }
 
+  // 依重要度挑出「今日焦點」：計分 → 跨來源去重(重複=互相佐證，加分) → 取前 8
+  function buildFocus(events: any[]) {
+    const now = Date.now();
+    const scored = events.map((e: any) => {
+      const t = (e.title || "") + " " + (e.summary || "");
+      const hrs = e.published_at ? Math.max(0, (now - Date.parse(e.published_at)) / 3600000) : 48;
+      let s = sevScore(t) + srcTier(e.source_name || "") * 7 + Math.max(0, 22 - hrs * 1.1);
+      if (FLUFF_RE.test(t)) s -= 40;
+      if (ROUTINE_RE.test(t)) s -= 45;
+      if ((e.categories || "").includes("defense")) s += 10;
+      return { ...e, _s: s, _k: normTitle(e.title) };
+    });
+    const byKey = new Map<string, any>();
+    for (const it of scored) {
+      const prev = byKey.get(it._k);
+      if (!prev) byKey.set(it._k, { ...it, _n: 1 });
+      else { prev._n++; if (it._s > prev._s) { const n = prev._n; byKey.set(it._k, { ...it, _n: n }); } }
+    }
+    const list = [...byKey.values()].map((x) => ({ ...x, _s: x._s + Math.min(x._n - 1, 3) * 9 }))
+      .filter((x) => x._s > 18)
+      .sort((a, b) => b._s - a._s).slice(0, 8);
+    setFocus(list);
+  }
+  function flyToEvent(e: any) {
+    const m = mapRef.current; if (!m || typeof e.lng !== "number") return;
+    m.flyTo({ center: [e.lng, e.lat], zoom: Math.max(m.getZoom(), 10), duration: 900 });
+    setSel({ title: e.title, summary: e.summary, cats: e.categories, source: e.source_name, url: e.url, county: e.county } as any);
+  }
   function recenter() { const m = mapRef.current; if (!m) return; const h = loadHome(); m.flyTo({ center: [h.lng, h.lat], zoom: h.zoom || 7.3, pitch: h.pitch ?? 55, bearing: h.bearing ?? 0, duration: 1100 }); }
   function memorize() { const m = mapRef.current; if (!m) return; const c = m.getCenter(); localStorage.setItem(HOME_KEY, JSON.stringify({ lng: c.lng, lat: c.lat, zoom: m.getZoom(), pitch: m.getPitch(), bearing: m.getBearing() })); setMemoSaved(true); setTimeout(() => setMemoSaved(false), 1600); }
   // 即時雲圖：日本向日葵九號(Himawari-9) AHI Band13 清晰紅外(每10分鐘)，經 NASA GIBS 重投影為 web 墨卡托
@@ -2230,6 +2295,7 @@ export default function App() {
         <button className={"coast-btn" + (coastOn ? " on" : "")} onClick={toggleCoast} title="海陸輪廓線：把全球海岸線(台灣/離島/日本/中國/越南…)以亮線疊在最上層。僅在紅外雲圖/衛星空照圖底圖時可用">{coastOn ? "輪廓 ✓" : "輪廓"}</button>
       )}
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
+        <button className={"focus-btn" + (focusOpen ? " on" : "")} onClick={() => setFocusOpen((v) => !v)} title="今日焦點：依嚴重度、來源層級、多來源佐證與時效計分排序，並自動壓低公關稿與例行公告">★ 今日焦點</button>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
         <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap}title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖(向日葵Himawari每10分) → 衛星空照圖(VIIRS真彩每日)">底圖：{BASEMAP_LABEL[basemap]}</button>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
@@ -2304,6 +2370,32 @@ export default function App() {
               </div>
             ))}
           </div>
+        </div>
+      )}
+      {focusOpen && (
+        <div className="focus-panel">
+          <div className="fp-head">
+            <span>★ 今日焦點</span>
+            <span className="fp-sub">{focus.length ? `近7日 ${focus.length} 則值得注意` : "計算中／暫無達標事件"}</span>
+          </div>
+          {focus.map((e, i) => {
+            const cat = ((e.categories || "").split(",")[0] || "policy") as string;
+            const d = e.published_at ? new Date(e.published_at) : null;
+            const when = d ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` : "";
+            return (
+              <div key={e.hash || i} className="fp-item" onClick={() => flyToEvent(e)}>
+                <span className="fp-rank" style={{ background: COLOR[cat] || "#888" }}>{i + 1}</span>
+                <div className="fp-body">
+                  <div className="fp-title">{e.title}</div>
+                  <div className="fp-meta">
+                    {when}　{e.source_name}{e.county ? "・" + e.county : ""}
+                    {e._n > 1 && <span className="fp-corr">{e._n} 源佐證</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+          {!focus.length && <div className="fp-empty">目前沒有超過門檻的事件（公關稿與例行公告已自動過濾）</div>}
         </div>
       )}
       {newsOpen && (
