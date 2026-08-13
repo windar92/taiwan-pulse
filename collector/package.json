@@ -1,0 +1,14 @@
+{
+  "name": "taiwan-pulse-ais-collector",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "常駐 AIS 收集器：一條 WebSocket 長連線寫入 Neon，取代 GitHub Actions 每 5 分鐘輪詢",
+  "scripts": {
+    "start": "node ais-collector.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "ws": "^8.18.0"
+  }
+}
