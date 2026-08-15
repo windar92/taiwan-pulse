@@ -430,8 +430,8 @@ function flagOf(iso, ssvid) {
   return k || null;
 }
 
-async function gfwFetch(token, dataset, body, limit) {
-  const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=0&limit=${limit}`;
+async function gfwPage(token, dataset, body, offset, limit) {
+  const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=${offset}&limit=${limit}`;
   const r = await fetch(u, {
     method: "POST",
     headers: { ...UA, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
@@ -439,6 +439,19 @@ async function gfwFetch(token, dataset, body, limit) {
   });
   if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
   return r.json();
+}
+// GFW 回傳順序是由舊到新，只抓第一頁會漏掉最新事件 → 必須翻頁抓完
+async function gfwAll(token, dataset, body, hardCap) {
+  const out = []; let offset = 0, total = 0;
+  for (let page = 0; page < 8; page++) {
+    const j = await gfwPage(token, dataset, body, offset, 500);
+    const en = j.entries || [];
+    total = j.total || total;
+    out.push(...en);
+    if (!en.length || out.length >= Math.min(total || Infinity, hardCap)) break;
+    offset = j.nextOffset != null ? j.nextOffset : offset + en.length;
+  }
+  return { entries: out, total };
 }
 
 async function gfw(days, cnOnly) {
@@ -448,19 +461,19 @@ async function gfw(days, cnOnly) {
   const day = (off) => new Date(Date.now() + off * 86400000).toISOString().slice(0, 10);
   const base = { startDate: day(-d), endDate: day(1), geometry: { type: "Polygon", coordinates: [GFW_RING] } };
   const jobs = [
-    ["encounter", "public-global-encounters-events:latest", 500],
-    ["loitering", "public-global-loitering-events:latest", 500],
-    ["gap", "public-global-gaps-events:latest", 500],
+    ["encounter", "public-global-encounters-events:latest"],
+    ["loitering", "public-global-loitering-events:latest"],
+    ["gap", "public-global-gaps-events:latest"],
   ];
-  const settled = await Promise.allSettled(jobs.map(([, ds, n]) => gfwFetch(token, ds, base, n)));
+  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwAll(token, ds, base, 3000)));
 
-  const events = [], errors = [], by = { encounter: 0, loitering: 0, gap: 0 };
-  let truncated = false, newest = null;
+  const events = [], errors = [], upstream = {};
+  let newest = null;
   settled.forEach((s, i) => {
     const kind = jobs[i][0];
     if (s.status !== "fulfilled") { errors.push(`${kind}: ${s.reason.message}`); return; }
-    if ((s.value.total || 0) > jobs[i][2]) truncated = true;
-    for (const e of s.value.entries || []) {
+    upstream[kind] = s.value.total;
+    for (const e of s.value.entries) {
       const p = e.position || {};
       const lon = Number(p.lon), lat = Number(p.lat);
       if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
@@ -486,14 +499,19 @@ async function gfw(days, cnOnly) {
       });
     }
   });
-  // 若上游筆數超過取樣上限，優先保留有情報價值的：涉中國籍 > AIS 中斷 > 船籍不明 > 時間新
-  const score = (x) => (x.cn ? 1e6 : 0) + (x.kind === "gap" ? 5e5 : 0) + (!x.flag ? 2e5 : 0) + (Date.parse(x.start) || 0) / 1e7;
-  events.sort((a, b) => score(b) - score(a));
-  const capped = events.slice(0, 700);
+  // 超過輸出上限才取捨：涉中國籍 > AIS 中斷 > 時間新
+  const total = events.length;
+  const CAP = 800;
+  let capped = events;
+  if (total > CAP) {
+    const score = (x) => (x.cn ? 4e12 : 0) + (x.kind === "gap" ? 2e12 : 0) + (Date.parse(x.start) || 0);
+    capped = events.slice().sort((a, b) => score(b) - score(a)).slice(0, CAP);
+  }
   capped.sort((a, b) => (Date.parse(b.start) || 0) - (Date.parse(a.start) || 0));
+  const by = { encounter: 0, loitering: 0, gap: 0 };
   capped.forEach((x) => { by[x.kind]++; });
   return {
-    ok: true, count: capped.length, total: events.length, truncated,
+    ok: true, count: capped.length, total, truncated: total > CAP, upstream,
     cn: capped.filter((x) => x.cn).length, by, days: d, since: base.startDate, newest,
     errors: errors.length ? errors : undefined,
     source: "Powered by Global Fishing Watch (CC BY-NC 4.0)",
