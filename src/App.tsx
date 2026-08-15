@@ -693,7 +693,7 @@ export default function App() {
     if (!on) { if (m.getLayer("gw-pt")) m.setLayoutProperty("gw-pt", "visibility", "none"); gwPopRef.current?.remove(); setGwOn(false); setGwInfo(""); return; }
     setGwOn(true); setGwInfo("海上異常事件載入中…");
     try {
-      const d = await fetch("/api/live?ds=gfw&days=60").then((r) => r.json());
+      const d = await fetch("/api/live?ds=gfw&days=30").then((r) => r.json());
       if (!d.ok) { setGwInfo(d.error === "GFW_TOKEN 未設定" ? "海上異常：尚未設定 GFW_TOKEN（Vercel 環境變數）" : `海上異常載入失敗：${d.error || ""}`); return; }
       const ev = (d.events || []) as any[];
       if (!ev.length) { setGwInfo("海上異常：近 30 天無事件"); return; }
