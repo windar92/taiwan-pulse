@@ -444,27 +444,6 @@ async function gfwPage(token, dataset, body, offset, limit, ms) {
     return await r.json();
   } finally { clearTimeout(t); }
 }
-// GFW 回傳順序是由舊到新；只抓第一頁會漏掉最新事件。
-// 但整頁翻完會讓 serverless 逾時 → 先用 limit=1 問總數，再直接跳到尾段抓最新 N 筆(共 2 次請求)。
-async function gfwTail(token, dataset, body, want) {
-  const head = await gfwPage(token, dataset, body, 0, 1, 45000);
-  const total = head.total || 0;
-  if (!total) return { entries: [], total: 0 };
-  const first = (head.entries && head.entries[0] && head.entries[0].start) || null;
-  const take = Math.min(want, total);
-  if (total <= take) {
-    const j = await gfwPage(token, dataset, body, 0, take);
-    return { entries: j.entries || [], total };
-  }
-  let entries = (await gfwPage(token, dataset, body, total - take, take)).entries || [];
-  // 保險：若上游其實是由新到舊(第 1 筆比尾段還新)，改取開頭
-  const tailMax = entries.reduce((m, e) => (e.start && (!m || e.start > m) ? e.start : m), null);
-  if (first && tailMax && first > tailMax) {
-    entries = (await gfwPage(token, dataset, body, 0, take)).entries || [];
-  }
-  return { entries, total };
-}
-
 async function gfw(days, cnOnly) {
   const token = process.env.GFW_TOKEN;
   if (!token) return { ok: false, error: "GFW_TOKEN 未設定", count: 0, events: [] };
@@ -476,7 +455,7 @@ async function gfw(days, cnOnly) {
     ["loitering", "public-global-loitering-events:latest"],
     ["gap", "public-global-gaps-events:latest"],
   ];
-  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 150)));
+  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwPage(token, ds, base, 0, 200).then(j => ({ entries: j.entries || [], total: j.total || 0 }))));
 
   const events = [], errors = [], upstream = {};
   let newest = null;
