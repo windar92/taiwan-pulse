@@ -119,6 +119,7 @@ export default function App() {
   const [wfOn, setWfOn] = useState(false); const [wfInfo, setWfInfo] = useState(""); const wfPopRef = useRef<mapboxgl.Popup | null>(null);
   const [hsOn, setHsOn] = useState(false); const [hsInfo, setHsInfo] = useState(""); const hsPopRef = useRef<mapboxgl.Popup | null>(null);
   const [cableOn, setCableOn] = useState(false); const [cableInfo, setCableInfo] = useState(""); const cablePopRef = useRef<mapboxgl.Popup | null>(null);
+  const [gwOn, setGwOn] = useState(false); const [gwInfo, setGwInfo] = useState(""); const gwPopRef = useRef<mapboxgl.Popup | null>(null);
   const [pdOn, setPdOn] = useState(false); const [pdInfo, setPdInfo] = useState(""); const pdPopRef = useRef<mapboxgl.Popup | null>(null);
   const [gibsInfo, setGibsInfo] = useState<string>("");
   const visModeRef = useRef<string>("");
@@ -679,6 +680,58 @@ export default function App() {
     "西南": [119.0, 21.9, "西南空域"], "北部": [122.3, 26.2, "北部空域"],
     "中部": [119.3, 24.2, "中部空域"], "東部": [123.3, 23.4, "東部空域"], "東北": [123.2, 26.2, "東北空域"],
   };
+  // ===== 海上異常事件(Global Fishing Watch)：會遇/滯留/AIS 中斷 =====
+  // 為何做這三類：會遇=海上轉載補給、滯留=可疑徘徊(海纜區)、AIS 中斷=刻意關訊號
+  const GW_KIND: Record<string, { c: string; t: string; d: string }> = {
+    encounter: { c: "#ff6d00", t: "海上會遇", d: "兩船長時間近距離並航，常見於轉載/補給" },
+    loitering: { c: "#ffd600", t: "異常滯留", d: "低速長時間徘徊，海纜區出現須留意" },
+    gap: { c: "#e53935", t: "AIS 中斷", d: "訊號長時間消失，可能刻意關閉" },
+  };
+  async function toggleGfw() {
+    const m = mapRef.current; if (!m) return;
+    const on = !gwOn;
+    if (!on) { if (m.getLayer("gw-pt")) m.setLayoutProperty("gw-pt", "visibility", "none"); gwPopRef.current?.remove(); setGwOn(false); setGwInfo(""); return; }
+    setGwOn(true); setGwInfo("海上異常事件載入中…");
+    try {
+      const d = await fetch("/api/live?ds=gfw&days=30").then((r) => r.json());
+      if (!d.ok) { setGwInfo(d.error === "GFW_TOKEN 未設定" ? "海上異常：尚未設定 GFW_TOKEN（Vercel 環境變數）" : `海上異常載入失敗：${d.error || ""}`); return; }
+      const ev = (d.events || []) as any[];
+      if (!ev.length) { setGwInfo("海上異常：近 30 天無事件"); return; }
+      const fc = { type: "FeatureCollection", features: ev.map((x) => ({ type: "Feature", geometry: { type: "Point", coordinates: [x.lon, x.lat] }, properties: { ...x, other: x.other ? JSON.stringify(x.other) : "", c: GW_KIND[x.kind]?.c || "#90a4ae", cn: x.flag === "中國" || (x.other && x.other.flag === "中國") } })) } as any;
+      if (m.getSource("gw-src")) (m.getSource("gw-src") as mapboxgl.GeoJSONSource).setData(fc);
+      else {
+        m.addSource("gw-src", { type: "geojson", data: fc });
+        m.addLayer({
+          id: "gw-pt", type: "circle", source: "gw-src",
+          paint: {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 4, 3.5, 8, 6, 12, 10],
+            "circle-color": ["get", "c"],
+            "circle-opacity": 0.85,
+            "circle-stroke-width": ["case", ["get", "cn"], 2.2, 1],
+            "circle-stroke-color": ["case", ["get", "cn"], "#ffffff", "#0a1a24"],
+          },
+        });
+        m.on("mouseenter", "gw-pt", () => { m.getCanvas().style.cursor = "pointer"; });
+        m.on("mouseleave", "gw-pt", () => { m.getCanvas().style.cursor = ""; });
+        m.on("click", "gw-pt", (e) => {
+          const f = e.features?.[0]; if (!f) return; const p = f.properties as any;
+          const k = GW_KIND[p.kind] || { c: "#90a4ae", t: p.kind, d: "" };
+          const tt = (v: string) => (v ? String(v).replace("T", " ").slice(0, 16) : "");
+          const ship = `${p.name || "(未具名)"}${p.flag ? `・${p.flag}` : ""}${p.ssvid ? `・MMSI ${p.ssvid}` : ""}`;
+          let o = "";
+          try { const ov = p.other ? JSON.parse(p.other) : null; if (ov) o = `<br/>對象船：${ov.name || "(未具名)"}${ov.flag ? `・${ov.flag}` : ""}${ov.ssvid ? `・MMSI ${ov.ssvid}` : ""}`; } catch { }
+          const meta = [p.hours != null ? `${p.hours} 小時` : "", p.km != null ? `${p.km} km` : "", p.shoreKm != null ? `離岸 ${p.shoreKm} km` : ""].filter(Boolean).join("・");
+          gwPopRef.current?.remove();
+          gwPopRef.current = new mapboxgl.Popup({ offset: 10, className: "hover-tip", maxWidth: "320px" }).setLngLat((f.geometry as any).coordinates).setHTML(
+            `<div class="qpop"><b><span style="color:${k.c}">●</span> ${k.t}</b><br/><span style="opacity:.85">${tt(p.start)} → ${tt(p.end)}</span><br/><span style="opacity:.9">${ship}</span>${o}<br/><span style="opacity:.7;font-size:12px">${meta}</span><br/><span style="opacity:.55;font-size:11px">${k.d}<br/>Powered by Global Fishing Watch</span></div>`
+          ).addTo(m);
+        });
+      }
+      m.setLayoutProperty("gw-pt", "visibility", "visible");
+      const b = d.by || {};
+      setGwInfo(`海上異常 ${ev.length} 件／近 30 天　橘=會遇 ${b.encounter || 0}　黃=滯留 ${b.loitering || 0}　紅=AIS中斷 ${b.gap || 0}\n白框＝涉中國籍 ${d.cn || 0} 件　來源：Global Fishing Watch (CC BY-NC 4.0)`);
+    } catch { setGwInfo("海上異常載入失敗"); }
+  }
   async function togglePlaDaily() {
     const m = mapRef.current; if (!m) return;
     const on = !pdOn;
@@ -1076,7 +1129,7 @@ export default function App() {
     w(rainOn, toggleRain); w(quakeOn, toggleQuake); w(tempOn, toggleTemp); w(staOn, toggleSta);
     w(typhoonOn, toggleTyphoon); w(oceanOn, toggleOcean); w(shipsOn, toggleShips);
     w(peaksOn, togglePeaks); w(lakeOn, toggleLake); w(gzOn, toggleGrayZone);
-    w(cctvOn, toggleCctv); w(currentsOn, toggleCurrents); w(plaOn, togglePla); w(cableOn, toggleCable); w(pdOn, togglePlaDaily);
+    w(cctvOn, toggleCctv); w(currentsOn, toggleCurrents); w(plaOn, togglePla); w(cableOn, toggleCable); w(pdOn, togglePlaDaily); w(gwOn, toggleGfw);
     if (on && riverModeRef.current === 0) cycleRiver();
     if (!on && riverModeRef.current > 0) { if (wallOn) toggleWaterWall(); if (riversOn) toggleRivers(); riverModeRef.current = 0; setRiverMode(0); }
   }
@@ -2313,6 +2366,7 @@ export default function App() {
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
         <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
         <button className={"cable-btn" + (cableOn ? " on" : "")} onClick={toggleCable} title="海纜事件(斷纜/維護)：資料 smc.peering.tw，原始來源含數位發展部/中華電信。紅=斷線、黃=部分、藍=維護">🔌 海纜事件</button>
+        <button className={"gw-btn" + (gwOn ? " on" : "")} onClick={toggleGfw} title="海上異常事件(Global Fishing Watch)：近30天臺海周邊的海上會遇、異常滯留、AIS 訊號中斷。橘=會遇、黃=滯留、紅=AIS中斷，白框=涉中國籍">🛰 海上異常</button>
         <button className={"pd-btn" + (pdOn ? " on" : "")} onClick={togglePlaDaily} title="共軍每日動態：國防部每日「中共解放軍臺海周邊海、空域動態」，將近14日各空域累計架次標在代表位置">📋 共軍動態</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
         <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
@@ -2340,6 +2394,7 @@ export default function App() {
         {currentsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{currentsInfo}</div>}
         {plaInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{plaInfo}</div>}
         {cableInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{cableInfo}</div>}
+        {gwInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gwInfo}</div>}
         {pdInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{pdInfo}</div>}
         {basinInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{basinInfo}</div>}
         {treesInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{treesInfo}</div>}
