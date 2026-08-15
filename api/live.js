@@ -430,19 +430,24 @@ function flagOf(iso, ssvid) {
   return k || null;
 }
 
-async function gfwPage(token, dataset, body, offset, limit) {
+async function gfwPage(token, dataset, body, offset, limit, ms) {
   const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=${offset}&limit=${limit}`;
-  const r = await fetch(u, {
-    method: "POST",
-    headers: { ...UA, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ datasets: [dataset], ...body }),
-  });
-  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
-  return r.json();
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), ms || 18000);
+  try {
+    const r = await fetch(u, {
+      method: "POST", signal: ac.signal,
+      headers: { ...UA, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ datasets: [dataset], ...body }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 120)}`);
+    return await r.json();
+  } finally { clearTimeout(t); }
 }
-// GFW 回傳順序是由舊到新，只抓第一頁會漏掉最新事件 → 必須翻頁抓完
+// GFW 回傳順序是由舊到新；只抓第一頁會漏掉最新事件。
+// 但整頁翻完會讓 serverless 逾時 → 先用 limit=1 問總數，再直接跳到尾段抓最新 N 筆(共 2 次請求)。
 async function gfwTail(token, dataset, body, want) {
-  const head = await gfwPage(token, dataset, body, 0, 1);
+  const head = await gfwPage(token, dataset, body, 0, 1, 8000);
   const total = head.total || 0;
   if (!total) return { entries: [], total: 0 };
   const first = (head.entries && head.entries[0] && head.entries[0].start) || null;
@@ -471,7 +476,7 @@ async function gfw(days, cnOnly) {
     ["loitering", "public-global-loitering-events:latest"],
     ["gap", "public-global-gaps-events:latest"],
   ];
-  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 500)));
+  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 200)));
 
   const events = [], errors = [], upstream = {};
   let newest = null;
@@ -507,7 +512,7 @@ async function gfw(days, cnOnly) {
   });
   // 超過輸出上限才取捨：涉中國籍 > AIS 中斷 > 時間新
   const total = events.length;
-  const CAP = 800;
+  const CAP = 600;
   let capped = events;
   if (total > CAP) {
     const score = (x) => (x.cn ? 4e12 : 0) + (x.kind === "gap" ? 2e12 : 0) + (Date.parse(x.start) || 0);
