@@ -693,7 +693,7 @@ export default function App() {
     if (!on) { if (m.getLayer("gw-pt")) m.setLayoutProperty("gw-pt", "visibility", "none"); gwPopRef.current?.remove(); setGwOn(false); setGwInfo(""); return; }
     setGwOn(true); setGwInfo("海上異常事件載入中…");
     try {
-      const d = await fetch("/api/live?ds=gfw&days=30").then((r) => r.json());
+      const d = await fetch("/api/live?ds=gfw&days=60").then((r) => r.json());
       if (!d.ok) { setGwInfo(d.error === "GFW_TOKEN 未設定" ? "海上異常：尚未設定 GFW_TOKEN（Vercel 環境變數）" : `海上異常載入失敗：${d.error || ""}`); return; }
       const ev = (d.events || []) as any[];
       if (!ev.length) { setGwInfo("海上異常：近 30 天無事件"); return; }
@@ -729,7 +729,8 @@ export default function App() {
       }
       m.setLayoutProperty("gw-pt", "visibility", "visible");
       const b = d.by || {};
-      setGwInfo(`海上異常 ${ev.length} 件／近 30 天　橘=會遇 ${b.encounter || 0}　黃=滯留 ${b.loitering || 0}　紅=AIS中斷 ${b.gap || 0}\n白框＝涉中國籍 ${d.cn || 0} 件　來源：Global Fishing Watch (CC BY-NC 4.0)`);
+      const nw = d.newest ? String(d.newest).slice(0, 10) : "";
+      setGwInfo(`海上異常 ${ev.length} 件／近 ${d.days} 天　橘=會遇 ${b.encounter || 0}　黃=滯留 ${b.loitering || 0}　紅=AIS中斷 ${b.gap || 0}\n白框＝涉中國籍 ${d.cn || 0} 件${d.truncated ? "・上游筆數過多，已優先保留中國籍／AIS中斷／船籍不明" : ""}\n最新事件 ${nw}（GFW 事件資料延遲約 3–4 週，非即時船位）　Powered by Global Fishing Watch (CC BY-NC 4.0)`);
     } catch { setGwInfo("海上異常載入失敗"); }
   }
   async function togglePlaDaily() {
