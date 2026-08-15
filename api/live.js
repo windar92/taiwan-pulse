@@ -468,7 +468,7 @@ async function gfwTail(token, dataset, body, want) {
 async function gfw(days, cnOnly) {
   const token = process.env.GFW_TOKEN;
   if (!token) return { ok: false, error: "GFW_TOKEN 未設定", count: 0, events: [] };
-  const d = Math.min(Math.max(days || 60, 1), 365);
+  const d = Math.min(Math.max(days || 30, 1), 365);
   const day = (off) => new Date(Date.now() + off * 86400000).toISOString().slice(0, 10);
   const base = { startDate: day(-d), endDate: day(1), geometry: { type: "Polygon", coordinates: [GFW_RING] } };
   const jobs = [
@@ -476,7 +476,7 @@ async function gfw(days, cnOnly) {
     ["loitering", "public-global-loitering-events:latest"],
     ["gap", "public-global-gaps-events:latest"],
   ];
-  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 200)));
+  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 150)));
 
   const events = [], errors = [], upstream = {};
   let newest = null;
@@ -581,7 +581,7 @@ export default async function handler(req, res) {
       case "pla": return send(res, 200, await pla(req), "s-maxage=86400, stale-while-revalidate=604800");
       case "cable": return send(res, 200, await cable(), "s-maxage=1800, stale-while-revalidate=3600");
       case "pladaily": return send(res, 200, await pladaily(), "s-maxage=3600, stale-while-revalidate=21600");
-      case "gfw": return send(res, 200, await gfw(Number(url.searchParams.get("days")) || 60, url.searchParams.get("cn") === "1"), "s-maxage=3600, stale-while-revalidate=21600");
+      case "gfw": return send(res, 200, await gfw(Number(url.searchParams.get("days")) || 30, url.searchParams.get("cn") === "1"), "s-maxage=3600, stale-while-revalidate=21600");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
