@@ -402,7 +402,17 @@ async function cable() {
 const GFW_RING = [[116, 19], [127, 19], [127, 28], [116, 28], [116, 19]];
 const r1 = (v) => (Number.isFinite(+v) ? +(+v).toFixed(1) : null);
 
-// 由 MMSI 前三碼(MID)推船籍，GFW 事件回傳不一定帶 flag
+// GFW 回傳 ISO3 船籍碼，轉中文；查無對照就原樣顯示
+const ISO3 = {
+  CHN: "中國", TWN: "臺灣", HKG: "香港", MAC: "澳門", JPN: "日本", KOR: "韓國", PRK: "北韓",
+  PHL: "菲律賓", VNM: "越南", IDN: "印尼", MYS: "馬來西亞", SGP: "新加坡", THA: "泰國",
+  KHM: "柬埔寨", MMR: "緬甸", IND: "印度", RUS: "俄羅斯", USA: "美國", AUS: "澳洲",
+  PAN: "巴拿馬", LBR: "賴比瑞亞", MHL: "馬紹爾群島", MLT: "馬爾他", CYP: "賽普勒斯",
+  BHS: "巴哈馬", SLE: "獅子山", TGO: "多哥", COM: "葛摩", VUT: "萬那杜", BLZ: "貝里斯",
+  MNG: "蒙古", PLW: "帛琉", KIR: "吉里巴斯", FSM: "密克羅尼西亞", COK: "庫克群島",
+  GBR: "英國", ITA: "義大利", ESP: "西班牙", NOR: "挪威", DNK: "丹麥", NLD: "荷蘭",
+};
+// 備援：由 MMSI 前三碼(MID)推船籍
 const MID = {
   412: "中國", 413: "中國", 414: "中國", 416: "臺灣", 477: "香港", 453: "澳門",
   431: "日本", 432: "日本", 440: "韓國", 441: "韓國", 445: "北韓",
@@ -410,9 +420,15 @@ const MID = {
   563: "新加坡", 564: "新加坡", 565: "新加坡", 566: "新加坡",
   351: "巴拿馬", 352: "巴拿馬", 353: "巴拿馬", 354: "巴拿馬", 355: "巴拿馬",
   356: "巴拿馬", 357: "巴拿馬", 370: "巴拿馬", 371: "巴拿馬", 372: "巴拿馬", 373: "巴拿馬",
-  636: "賴比瑞亞", 637: "賴比瑞亞", 538: "馬紹爾群島", 477: "香港",
+  636: "賴比瑞亞", 637: "賴比瑞亞", 538: "馬紹爾群島",
 };
-const midFlag = (ssvid) => MID[String(ssvid || "").slice(0, 3)] || null;
+function flagOf(iso, ssvid) {
+  const k = String(iso || "").toUpperCase();
+  if (k && ISO3[k]) return ISO3[k];
+  const m = MID[String(ssvid || "").slice(0, 3)];
+  if (m) return m;
+  return k || null;
+}
 
 async function gfwFetch(token, dataset, body, limit) {
   const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=0&limit=${limit}`;
@@ -425,23 +441,25 @@ async function gfwFetch(token, dataset, body, limit) {
   return r.json();
 }
 
-async function gfw(days) {
+async function gfw(days, cnOnly) {
   const token = process.env.GFW_TOKEN;
   if (!token) return { ok: false, error: "GFW_TOKEN 未設定", count: 0, events: [] };
-  const d = Math.min(Math.max(days || 30, 1), 180);
+  const d = Math.min(Math.max(days || 60, 1), 365);
   const day = (off) => new Date(Date.now() + off * 86400000).toISOString().slice(0, 10);
   const base = { startDate: day(-d), endDate: day(1), geometry: { type: "Polygon", coordinates: [GFW_RING] } };
   const jobs = [
-    ["encounter", "public-global-encounters-events:latest", 250],
-    ["loitering", "public-global-loitering-events:latest", 250],
-    ["gap", "public-global-gaps-events:latest", 250],
+    ["encounter", "public-global-encounters-events:latest", 500],
+    ["loitering", "public-global-loitering-events:latest", 500],
+    ["gap", "public-global-gaps-events:latest", 500],
   ];
   const settled = await Promise.allSettled(jobs.map(([, ds, n]) => gfwFetch(token, ds, base, n)));
 
   const events = [], errors = [], by = { encounter: 0, loitering: 0, gap: 0 };
+  let truncated = false, newest = null;
   settled.forEach((s, i) => {
     const kind = jobs[i][0];
     if (s.status !== "fulfilled") { errors.push(`${kind}: ${s.reason.message}`); return; }
+    if ((s.value.total || 0) > jobs[i][2]) truncated = true;
     for (const e of s.value.entries || []) {
       const p = e.position || {};
       const lon = Number(p.lon), lat = Number(p.lat);
@@ -450,28 +468,36 @@ async function gfw(days) {
       const ssvid = v.ssvid || null;
       const dur = e.start && e.end ? (Date.parse(e.end) - Date.parse(e.start)) / 3600000 : null;
       const o = enc && enc.vessel ? enc.vessel : null;
-      by[kind]++;
+      const flag = flagOf(v.flag, ssvid);
+      const other = o ? { name: o.name || null, ssvid: o.ssvid || null, vtype: o.type || null, flag: flagOf(o.flag, o.ssvid) } : null;
+      const cn = flag === "中國" || (other && other.flag === "中國");
+      if (cnOnly && !cn) continue;
+      if (e.start && (!newest || e.start > newest)) newest = e.start;
       events.push({
-        id: e.id, kind,
+        id: e.id, kind, cn,
         start: e.start || null, end: e.end || null,
         lon: +lon.toFixed(4), lat: +lat.toFixed(4),
-        name: v.name || null, ssvid, vtype: v.type || null,
-        flag: v.flag || midFlag(ssvid),
+        name: v.name || null, ssvid, vtype: v.type || null, flag,
         hours: r1(loi ? loi.totalTimeHours : dur),
         km: r1(enc ? enc.medianDistanceKilometers : loi ? loi.totalDistanceKm : null),
         shoreKm: r1(e.distances && e.distances.startDistanceFromShoreKm),
         encType: enc ? enc.type || null : null,
-        other: o ? { name: o.name || null, ssvid: o.ssvid || null, vtype: o.type || null, flag: o.flag || midFlag(o.ssvid) } : null,
+        other,
       });
     }
   });
-  events.sort((a, b) => (Date.parse(b.start) || 0) - (Date.parse(a.start) || 0));
-  const cn = events.filter((x) => x.flag === "中國" || (x.other && x.other.flag === "中國")).length;
+  // 若上游筆數超過取樣上限，優先保留有情報價值的：涉中國籍 > AIS 中斷 > 船籍不明 > 時間新
+  const score = (x) => (x.cn ? 1e6 : 0) + (x.kind === "gap" ? 5e5 : 0) + (!x.flag ? 2e5 : 0) + (Date.parse(x.start) || 0) / 1e7;
+  events.sort((a, b) => score(b) - score(a));
+  const capped = events.slice(0, 700);
+  capped.sort((a, b) => (Date.parse(b.start) || 0) - (Date.parse(a.start) || 0));
+  capped.forEach((x) => { by[x.kind]++; });
   return {
-    ok: true, count: events.length, cn, by, days: d, since: base.startDate,
+    ok: true, count: capped.length, total: events.length, truncated,
+    cn: capped.filter((x) => x.cn).length, by, days: d, since: base.startDate, newest,
     errors: errors.length ? errors : undefined,
     source: "Powered by Global Fishing Watch (CC BY-NC 4.0)",
-    events,
+    events: capped,
   };
 }
 
@@ -526,7 +552,7 @@ export default async function handler(req, res) {
       case "pla": return send(res, 200, await pla(req), "s-maxage=86400, stale-while-revalidate=604800");
       case "cable": return send(res, 200, await cable(), "s-maxage=1800, stale-while-revalidate=3600");
       case "pladaily": return send(res, 200, await pladaily(), "s-maxage=3600, stale-while-revalidate=21600");
-      case "gfw": return send(res, 200, await gfw(Number(url.searchParams.get("days")) || 30), "s-maxage=3600, stale-while-revalidate=21600");
+      case "gfw": return send(res, 200, await gfw(Number(url.searchParams.get("days")) || 60, url.searchParams.get("cn") === "1"), "s-maxage=3600, stale-while-revalidate=21600");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
