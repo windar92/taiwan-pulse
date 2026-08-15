@@ -441,17 +441,23 @@ async function gfwPage(token, dataset, body, offset, limit) {
   return r.json();
 }
 // GFW 回傳順序是由舊到新，只抓第一頁會漏掉最新事件 → 必須翻頁抓完
-async function gfwAll(token, dataset, body, hardCap) {
-  const out = []; let offset = 0, total = 0;
-  for (let page = 0; page < 8; page++) {
-    const j = await gfwPage(token, dataset, body, offset, 500);
-    const en = j.entries || [];
-    total = j.total || total;
-    out.push(...en);
-    if (!en.length || out.length >= Math.min(total || Infinity, hardCap)) break;
-    offset = j.nextOffset != null ? j.nextOffset : offset + en.length;
+async function gfwTail(token, dataset, body, want) {
+  const head = await gfwPage(token, dataset, body, 0, 1);
+  const total = head.total || 0;
+  if (!total) return { entries: [], total: 0 };
+  const first = (head.entries && head.entries[0] && head.entries[0].start) || null;
+  const take = Math.min(want, total);
+  if (total <= take) {
+    const j = await gfwPage(token, dataset, body, 0, take);
+    return { entries: j.entries || [], total };
   }
-  return { entries: out, total };
+  let entries = (await gfwPage(token, dataset, body, total - take, take)).entries || [];
+  // 保險：若上游其實是由新到舊(第 1 筆比尾段還新)，改取開頭
+  const tailMax = entries.reduce((m, e) => (e.start && (!m || e.start > m) ? e.start : m), null);
+  if (first && tailMax && first > tailMax) {
+    entries = (await gfwPage(token, dataset, body, 0, take)).entries || [];
+  }
+  return { entries, total };
 }
 
 async function gfw(days, cnOnly) {
@@ -465,7 +471,7 @@ async function gfw(days, cnOnly) {
     ["loitering", "public-global-loitering-events:latest"],
     ["gap", "public-global-gaps-events:latest"],
   ];
-  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwAll(token, ds, base, 3000)));
+  const settled = await Promise.allSettled(jobs.map(([, ds]) => gfwTail(token, ds, base, 500)));
 
   const events = [], errors = [], upstream = {};
   let newest = null;
