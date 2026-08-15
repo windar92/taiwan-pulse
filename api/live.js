@@ -433,7 +433,7 @@ function flagOf(iso, ssvid) {
 async function gfwPage(token, dataset, body, offset, limit, ms) {
   const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=${offset}&limit=${limit}`;
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), ms || 18000);
+  const t = setTimeout(() => ac.abort(), ms || 45000);
   try {
     const r = await fetch(u, {
       method: "POST", signal: ac.signal,
@@ -447,7 +447,7 @@ async function gfwPage(token, dataset, body, offset, limit, ms) {
 // GFW 回傳順序是由舊到新；只抓第一頁會漏掉最新事件。
 // 但整頁翻完會讓 serverless 逾時 → 先用 limit=1 問總數，再直接跳到尾段抓最新 N 筆(共 2 次請求)。
 async function gfwTail(token, dataset, body, want) {
-  const head = await gfwPage(token, dataset, body, 0, 1, 8000);
+  const head = await gfwPage(token, dataset, body, 0, 1, 45000);
   const total = head.total || 0;
   if (!total) return { entries: [], total: 0 };
   const first = (head.entries && head.entries[0] && head.entries[0].start) || null;
