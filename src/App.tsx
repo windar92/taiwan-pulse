@@ -42,6 +42,7 @@ const CATS: { id: Cat; label: string; color: string }[] = [
   { id: "activity", label: "活動", color: "#ba68c8" },
   { id: "report", label: "回報牆", color: "#26c6da" },
 ];
+const VIS_CATS = CATS.filter((c) => c.id !== "report");
 const PRIORITY: Cat[] = ["disaster", "safety", "warning", "defense", "policy", "ecology", "activity"];
 const COLOR: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.color]));
 const LABEL: Record<string, string> = Object.fromEntries(CATS.map((c) => [c.id, c.label]));
@@ -195,6 +196,7 @@ export default function App() {
   const curStepRef = useRef<number>(0);
   const curGridRef = useRef<{ map: Map<string, { u: number; v: number }>; lon0: number; lat0: number; lonMax: number; latMax: number; g: number } | null>(null);
   const [zoomInfo, setZoomInfo] = useState("");
+  const [tab, setTab] = useState<"news"|"base"|"sky"|"geo"|"threat">("news");
   const [plaOn, setPlaOn] = useState(false);
   const [plaInfo, setPlaInfo] = useState("");
   const plaPopRef = useRef<mapboxgl.Popup | null>(null);
@@ -404,7 +406,7 @@ export default function App() {
     const map = mapRef.current; if (!map) return;
     const [evRes, rpRes] = await Promise.all([
       fetch(`/api/events?days=7`).then((r) => r.json()).catch(() => null),
-      fetch(`/api/reports?radius=%E5%85%A8%E5%9C%8B&days=14`).then((r) => r.json()).catch(() => null),
+      Promise.resolve(null), // 回報牆功能暫時隱藏(保留程式碼)
     ]);
     const features: any[] = []; const tally: Record<string, number> = {};
     const primary = (cats: string): Cat => { const a = (cats || "").split(","); return (PRIORITY.find((c) => a.includes(c)) as Cat) || "policy"; };
@@ -2317,7 +2319,7 @@ export default function App() {
     setSent(true); refreshOrder();
   }
 
-  const allOn = visible.size === CATS.length;
+  const allOn = visible.size === VIS_CATS.length;
   if (!TOKEN) return <div className="token-missing"><div><strong>尚未設定 Mapbox token</strong></div></div>;
 
   return (
@@ -2349,34 +2351,51 @@ export default function App() {
         <button className={"coast-btn" + (coastOn ? " on" : "")} onClick={toggleCoast} title="海陸輪廓線：把全球海岸線(台灣/離島/日本/中國/越南…)以亮線疊在最上層。僅在紅外雲圖/衛星空照圖底圖時可用">{coastOn ? "輪廓 ✓" : "輪廓"}</button>
       )}
       <div className={"layer-menu" + (menuOpen ? "" : " hidden")}>
+        <div className="tabbar">
+          <button className={"tab-btn" + (tab === "news" ? " on" : "")} onClick={() => setTab("news")}>新聞與政府公告</button>
+          <button className={"tab-btn" + (tab === "base" ? " on" : "")} onClick={() => setTab("base")}>底圖</button>
+          <button className={"tab-btn" + (tab === "sky" ? " on" : "")} onClick={() => setTab("sky")}>天文</button>
+          <button className={"tab-btn" + (tab === "geo" ? " on" : "")} onClick={() => setTab("geo")}>地理</button>
+          <button className={"tab-btn" + (tab === "threat" ? " on" : "")} onClick={() => setTab("threat")}>中國威脅</button>
+        </div>
+        {tab === "news" && (<>
         <button className={"focus-btn" + (focusOpen ? " on" : "")} onClick={() => setFocusOpen((v) => !v)} title="今日焦點：依嚴重度、來源層級、多來源佐證與時效計分排序，並自動壓低公關稿與例行公告">★ 今日焦點</button>
         <button className={"news-btn" + (newsOpen ? " on" : "")} onClick={() => setNewsOpen((o) => !o)} title="消息分類篩選(新聞與群眾回報)，面板顯示於左側">◂ 消息</button>
+        <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
+        </>)}
+        {tab === "base" && (<>
         <button className={"basemap-btn" + (basemap !== "dark" ? " on" : "")} onClick={cycleBasemap}title="切換底圖：原始 → 等高線 → 空照 → 紅外雲圖(向日葵Himawari每10分) → 衛星空照圖(VIIRS真彩每日)">底圖：{BASEMAP_LABEL[basemap]}</button>
+        </>)}
+        {tab === "sky" && (<>
         <button className={"rain-btn" + (rainOn ? " on" : "")} onClick={toggleRain} title="即時雨量 3D 水柱">雨量</button>
         <button className={"quake-btn" + (quakeOn ? " on" : "")} onClick={toggleQuake} title="近期地震：震央 + 震度擴散範圍">地震</button>
         <button className={"temp-btn" + (tempOn ? " on" : "")} onClick={toggleTemp} title="即時氣溫 3D 柱">氣溫</button>
         <button className={"sta-btn" + (staOn ? " on" : "")} onClick={toggleSta} title="測站位置(氣象/雨量/地震)">測站</button>
         <button className={"ty-btn" + (typhoonMode > 0 ? " on" : "")} onClick={cycleTyphoon} title="颱風：CWA 官方即時路徑(過去/現在/預報 + 暴風圈)">{typhoonMode === 0 ? "颱風" : "颱風：路徑"}</button>
         <button className={"ocean-btn" + (oceanMode > 0 ? " on" : "")} onClick={cycleOcean} title="海溫循環：關 → 色溫底圖 → 色溫底圖+溫度數字（NASA JPL MUR SST 每日）">{oceanMode === 0 ? "海溫" : oceanMode === 1 ? "海溫：色溫" : "海溫：色溫+數字"}</button>
-        <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環：關 → 河流線+河名 → 河流+即時水位高度">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
-        <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS + 近7天航跡">中國船</button>
-        <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
         <button className={"lake-btn" + (lakeOn ? " on" : "")} onClick={toggleLake} title="堰塞湖監測(林保署):馬太鞍溪/萬里溪為真實湖體">堰塞湖</button>
-        <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
-        <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="即時影像：國道(高公局)橘、省道(公路局)黃、河川(水利署)藍、路口淹水紫。點擊看即時畫面">即時影像</button>
         <button className={"currents-btn" + (currentsOn ? " on" : "")} onClick={toggleCurrents} title="即時海流(NRT 地轉流)：箭頭=流向、顏色=流速">海流</button>
-        <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
-        <button className={"cable-btn" + (cableOn ? " on" : "")} onClick={toggleCable} title="海纜事件(斷纜/維護)：資料 smc.peering.tw，原始來源含數位發展部/中華電信。紅=斷線、黃=部分、藍=維護">🔌 海纜事件</button>
-        <button className={"gw-btn" + (gwOn ? " on" : "")} onClick={toggleGfw} title="海上異常事件(Global Fishing Watch)：近30天臺海周邊的海上會遇、異常滯留、AIS 訊號中斷。橘=會遇、黃=滯留、紅=AIS中斷，白框=涉中國籍">🛰 海上異常</button>
-        <button className={"pd-btn" + (pdOn ? " on" : "")} onClick={togglePlaDaily} title="共軍每日動態：國防部每日「中共解放軍臺海周邊海、空域動態」，將近14日各空域累計架次標在代表位置">📋 共軍動態</button>
         <button className={"basin-btn" + (basinMode > 0 ? " on" : "")} onClick={cycleBasin} title="集水區面積雨量循環：關 → 近1小時 → 近24小時(流域內雨量站面積平均)">{basinMode === 0 ? "集水區雨量" : basinMode === 1 ? "集水區：近1時" : "集水區：近24時"}</button>
+        </>)}
+        {tab === "geo" && (<>
+        <button className={"river-btn" + (riverMode > 0 ? " on" : "")} onClick={cycleRiver} title="河流循環：關 → 河流線+河名 → 河流+即時水位高度">{riverMode === 0 ? "河流" : riverMode === 1 ? "河流：線" : "河流：即時水位"}</button>
+        <button className={"peak-btn" + (peaksOn ? " on" : "")} onClick={togglePeaks} title="台灣山岳:百岳/小百岳分層">山岳</button>
         <button className={"landslide-btn" + (landslideOn ? " on" : "")} onClick={toggleLandslide} title="山崩與地滑地質敏感區(經濟部地礦中心)：疊在正射/等高線底圖上判讀高風險邊坡，行前避開">⛰ 山崩地滑</button>
         <button className={"shade-btn" + (shadeOn ? " on" : "")} onClick={toggleShade} title="光達地形暈渲(20m 多向陰影)：半透明疊在底圖上，強化稜線/溪谷立體感">🗻 地形暈渲</button>
         <button className={"slope-btn" + (slopeOn ? " on" : "")} onClick={toggleSlope} title="坡度圖(20m 光達)：越暖色越陡，登山風險判讀">📐 坡度圖</button>
         <button className={"tree-btn" + (treesOn ? " on" : "")} onClick={toggleTrees} title="台灣巨木地圖(找樹的人·空載光達)：立體樹依真實樹高，可調高度誇張度">🌲 巨木地圖</button>
         <button className={"wf-btn" + (wfOn ? " on" : "")} onClick={() => togglePoi("wf")} title="野溪瀑布(跟著小飛玩)：業餘整理祕境點位，僅供參考">💧 瀑布</button>
         <button className={"hs-btn" + (hsOn ? " on" : "")} onClick={() => togglePoi("hs")} title="野溪溫泉(跟著小飛玩)：業餘整理祕境點位，僅供參考">♨ 野溪溫泉</button>
-        <button className={"res-btn" + (resOpen ? " on" : "")} onClick={toggleResources} title="資訊下載：防災／民防參考文件(小橘書、災害管理手冊)">📥 資訊下載</button>
+        <button className={"cctv-btn" + (cctvOn ? " on" : "")} onClick={toggleCctv} title="即時影像：國道(高公局)橘、省道(公路局)黃、河川(水利署)藍、路口淹水紫。點擊看即時畫面">即時影像</button>
+        </>)}
+        {tab === "threat" && (<>
+        <button className={"ship-btn" + (shipsOn ? " on" : "")} onClick={toggleShips} title="中國籍船舶 AIS + 近7天航跡">中國船</button>
+        <button className={"gz-btn" + (gzOn ? " on" : "")} onClick={toggleGrayZone} title="中國軍事/灰色地帶入侵紀錄：拉時間軸自選區間">中國入侵</button>
+        <button className={"pla-btn" + (plaOn ? " on" : "")} onClick={togglePla} title="解放軍基地及設施(社群 OSINT，非官方)">解放軍設施</button>
+        <button className={"gw-btn" + (gwOn ? " on" : "")} onClick={toggleGfw} title="海上異常事件(Global Fishing Watch)：近30天臺海周邊的海上會遇、異常滯留、AIS 訊號中斷。橘=會遇、黃=滯留、紅=AIS中斷，白框=涉中國籍">🛰 海上異常</button>
+        <button className={"cable-btn" + (cableOn ? " on" : "")} onClick={toggleCable} title="海纜事件(斷纜/維護)：資料 smc.peering.tw，原始來源含數位發展部/中華電信。紅=斷線、黃=部分、藍=維護">🔌 海纜事件</button>
+        <button className={"pd-btn" + (pdOn ? " on" : "")} onClick={togglePlaDaily} title="共軍每日動態：國防部每日「中共解放軍臺海周邊海、空域動態」，將近14日各空域累計架次標在代表位置">📋 共軍動態</button>
+        </>)}
       </div>
       <div className="layer-info-col">
         {gibsInfo && <div className="li" style={{ whiteSpace: "pre-line" }}>{gibsInfo}</div>}
@@ -2456,12 +2475,12 @@ export default function App() {
       )}
       {newsOpen && (
         <div className="news-panel">
-          {CATS.map((c) => (
+          {VIS_CATS.map((c) => (
             <button key={c.id} className={"news-chip" + (visible.has(c.id) ? "" : " off")} onClick={() => toggle(c.id)}>
               <span className="dot" style={{ background: c.color }} />{c.label}<span className="cnt">{counts[c.id] || 0}</span>
             </button>
           ))}
-          <button className="news-chip" onClick={() => setVisible(allOn ? new Set() : new Set(CATS.map((c) => c.id)))}>
+          <button className="news-chip" onClick={() => setVisible(allOn ? new Set() : new Set(VIS_CATS.map((c) => c.id)))}>
             <span className="dot" style={{ background: "#ffffff", opacity: allOn ? 1 : 0.25 }} />全選
           </button>
         </div>
@@ -2554,9 +2573,7 @@ export default function App() {
           {[0.15, 0.45, 0.75, 1.05, 1.35].map((s) => (<span key={s} className="qlg-sw" style={{ background: `rgb(${curColor(s).join(",")})` }}>{s.toFixed(1)}</span>))}
         </div>
       )}
-      {zoomInfo && (
-        <div style={{ position: "absolute", left: 8, bottom: 40, zIndex: 5, background: "rgba(18,20,24,.82)", color: "#e6eaf0", font: "12px/1.4 system-ui,sans-serif", padding: "4px 8px", borderRadius: 6, pointerEvents: "none", whiteSpace: "nowrap" }}>{zoomInfo}</div>
-      )}
+      {/* 海流取樣格距讀數已移除 */}
 
       {quakeOn && quakeList.length > 0 && (
         <div className="quake-list">
