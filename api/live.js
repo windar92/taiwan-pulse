@@ -396,6 +396,85 @@ async function cable() {
 }
 
 // ---- \u570b\u9632\u90e8\u6bcf\u65e5\u300c\u4e2d\u5171\u89e3\u653e\u8ecd\u81fa\u6d77\u5468\u908a\u6d77\u3001\u7a7a\u57df\u52d5\u614b\u300d----
+// ---- Global Fishing Watch：臺海周邊海上異常事件（會遇/滯留/AIS 中斷）----
+// 免費 API token（GFW_TOKEN），CC BY-NC 4.0，須標示 "Powered by Global Fishing Watch"
+// 為何用這三類：會遇=海上轉載/補給、滯留=可疑停留（海纜區徘徊）、AIS 中斷=刻意關訊號
+const GFW_RING = [[116, 19], [127, 19], [127, 28], [116, 28], [116, 19]];
+const r1 = (v) => (Number.isFinite(+v) ? +(+v).toFixed(1) : null);
+
+// 由 MMSI 前三碼(MID)推船籍，GFW 事件回傳不一定帶 flag
+const MID = {
+  412: "中國", 413: "中國", 414: "中國", 416: "臺灣", 477: "香港", 453: "澳門",
+  431: "日本", 432: "日本", 440: "韓國", 441: "韓國", 445: "北韓",
+  548: "菲律賓", 574: "越南", 525: "印尼", 533: "馬來西亞", 567: "泰國",
+  563: "新加坡", 564: "新加坡", 565: "新加坡", 566: "新加坡",
+  351: "巴拿馬", 352: "巴拿馬", 353: "巴拿馬", 354: "巴拿馬", 355: "巴拿馬",
+  356: "巴拿馬", 357: "巴拿馬", 370: "巴拿馬", 371: "巴拿馬", 372: "巴拿馬", 373: "巴拿馬",
+  636: "賴比瑞亞", 637: "賴比瑞亞", 538: "馬紹爾群島", 477: "香港",
+};
+const midFlag = (ssvid) => MID[String(ssvid || "").slice(0, 3)] || null;
+
+async function gfwFetch(token, dataset, body, limit) {
+  const u = `https://gateway.api.globalfishingwatch.org/v3/events?offset=0&limit=${limit}`;
+  const r = await fetch(u, {
+    method: "POST",
+    headers: { ...UA, Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ datasets: [dataset], ...body }),
+  });
+  if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 160)}`);
+  return r.json();
+}
+
+async function gfw(days) {
+  const token = process.env.GFW_TOKEN;
+  if (!token) return { ok: false, error: "GFW_TOKEN 未設定", count: 0, events: [] };
+  const d = Math.min(Math.max(days || 30, 1), 180);
+  const day = (off) => new Date(Date.now() + off * 86400000).toISOString().slice(0, 10);
+  const base = { startDate: day(-d), endDate: day(1), geometry: { type: "Polygon", coordinates: [GFW_RING] } };
+  const jobs = [
+    ["encounter", "public-global-encounters-events:latest", 250],
+    ["loitering", "public-global-loitering-events:latest", 250],
+    ["gap", "public-global-gaps-events:latest", 250],
+  ];
+  const settled = await Promise.allSettled(jobs.map(([, ds, n]) => gfwFetch(token, ds, base, n)));
+
+  const events = [], errors = [], by = { encounter: 0, loitering: 0, gap: 0 };
+  settled.forEach((s, i) => {
+    const kind = jobs[i][0];
+    if (s.status !== "fulfilled") { errors.push(`${kind}: ${s.reason.message}`); return; }
+    for (const e of s.value.entries || []) {
+      const p = e.position || {};
+      const lon = Number(p.lon), lat = Number(p.lat);
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      const v = e.vessel || {}, enc = e.encounter || null, loi = e.loitering || null;
+      const ssvid = v.ssvid || null;
+      const dur = e.start && e.end ? (Date.parse(e.end) - Date.parse(e.start)) / 3600000 : null;
+      const o = enc && enc.vessel ? enc.vessel : null;
+      by[kind]++;
+      events.push({
+        id: e.id, kind,
+        start: e.start || null, end: e.end || null,
+        lon: +lon.toFixed(4), lat: +lat.toFixed(4),
+        name: v.name || null, ssvid, vtype: v.type || null,
+        flag: v.flag || midFlag(ssvid),
+        hours: r1(loi ? loi.totalTimeHours : dur),
+        km: r1(enc ? enc.medianDistanceKilometers : loi ? loi.totalDistanceKm : null),
+        shoreKm: r1(e.distances && e.distances.startDistanceFromShoreKm),
+        encType: enc ? enc.type || null : null,
+        other: o ? { name: o.name || null, ssvid: o.ssvid || null, vtype: o.type || null, flag: o.flag || midFlag(o.ssvid) } : null,
+      });
+    }
+  });
+  events.sort((a, b) => (Date.parse(b.start) || 0) - (Date.parse(a.start) || 0));
+  const cn = events.filter((x) => x.flag === "中國" || (x.other && x.other.flag === "中國")).length;
+  return {
+    ok: true, count: events.length, cn, by, days: d, since: base.startDate,
+    errors: errors.length ? errors : undefined,
+    source: "Powered by Global Fishing Watch (CC BY-NC 4.0)",
+    events,
+  };
+}
+
 function parsePlaReport(t) {
   const zoneKeys = ["\u897f\u5357", "\u5317\u90e8", "\u4e2d\u90e8", "\u6771\u90e8", "\u6771\u5317"];
   const s = (t.match(/\u5075\u7372[^\u3002]*\u3002/) || [""])[0];
@@ -447,6 +526,7 @@ export default async function handler(req, res) {
       case "pla": return send(res, 200, await pla(req), "s-maxage=86400, stale-while-revalidate=604800");
       case "cable": return send(res, 200, await cable(), "s-maxage=1800, stale-while-revalidate=3600");
       case "pladaily": return send(res, 200, await pladaily(), "s-maxage=3600, stale-while-revalidate=21600");
+      case "gfw": return send(res, 200, await gfw(Number(url.searchParams.get("days")) || 30), "s-maxage=3600, stale-while-revalidate=21600");
       case "river": {
         if (url.searchParams.get("debug") === "1") return send(res, 200, { ok: true, raw: await riverRaw() }, "no-store");
         const stations = await listRiverStations();
